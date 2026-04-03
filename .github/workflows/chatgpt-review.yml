@@ -1,0 +1,25 @@
+name: ChatGPT Code Review
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  chatgpt-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run ChatGPT Code Review
+        uses: anc95/ChatGPT-CodeReview@main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        with:
+          MODEL: "gpt-4-turbo" 
+          LANGUAGE: "Indonesian"
