@@ -1,10 +1,11 @@
 import "dotenv/config";
 import type { DiscordGatewayAdapterCreator } from "@discordjs/voice";
-import { Events, GuildMember } from "discord.js";
+import { Events, GuildMember, MessageFlags } from "discord.js";
 import { JoinVoiceChannel } from "../../application/use-cases/JoinVoiceChannel";
 import { LeaveVoiceChannel } from "../../application/use-cases/LeaveVoiceChannel";
 import { createDiscordClient } from "../../infrastructure/discord/client/createDiscordClient";
 import { DiscordVoiceGateway } from "../../infrastructure/voice/DiscordVoiceGateway";
+import { StartPlayback } from "../../application/use-cases/StartPlayback";
 
 async function main(): Promise<void> {
   const token = process.env.DISCORD_TOKEN;
@@ -18,6 +19,7 @@ async function main(): Promise<void> {
   const voiceGateway = new DiscordVoiceGateway();
   const joinVoiceChannelUseCase = new JoinVoiceChannel(voiceGateway);
   const leaveVoiceChannelUseCase = new LeaveVoiceChannel(voiceGateway);
+  const startPlaybackUseCase = new StartPlayback(voiceGateway);
 
   client.once(Events.ClientReady, (readyClient) => {
     console.log(`Logged in as ${readyClient.user.tag}`);
@@ -43,14 +45,15 @@ async function main(): Promise<void> {
       }
 
       if (interaction.commandName === "join") {
+        await interaction.deferReply({ ephemeral: true });
+
         const member = interaction.member as GuildMember;
         const voiceChannel = member.voice.channel;
 
         if (!voiceChannel) {
-          await interaction.reply({
-            content: "You need to join a voice channel first.",
-            ephemeral: true,
-          });
+          await interaction.editReply(
+            "You need to join a voice channel first.",
+          );
           return;
         }
 
@@ -61,9 +64,51 @@ async function main(): Promise<void> {
             .voiceAdapterCreator as DiscordGatewayAdapterCreator,
         });
 
-        await interaction.reply({
+        await interaction.editReply({
           content: `Joined **${voiceChannel.name}**.`,
-          ephemeral: true,
+        });
+        return;
+      }
+
+      if (interaction.commandName === "play") {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+        const member = interaction.member as GuildMember;
+        const voiceChannel = member.voice.channel;
+
+        if (!voiceChannel) {
+          await interaction.editReply(
+            "You need to join a voice channel first.",
+          );
+          return;
+        }
+
+        const url = interaction.options.getString("url", true);
+
+        await joinVoiceChannelUseCase.execute({
+          guildId: interaction.guildId!,
+          channelId: voiceChannel.id,
+          adapterCreator: voiceChannel.guild
+            .voiceAdapterCreator as DiscordGatewayAdapterCreator,
+        });
+
+        await startPlaybackUseCase.execute({
+          guildId: interaction.guildId!,
+          url,
+          title: url,
+        });
+
+        await interaction.editReply({
+          content: `Started playing audio from:\n${url}`,
+        });
+        return;
+      }
+
+      if (interaction.commandName === "stop") {
+        await voiceGateway.stop(interaction.guildId!);
+
+        await interaction.editReply({
+          content: "Playback stopped.",
         });
         return;
       }

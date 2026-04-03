@@ -30,8 +30,26 @@ async function main(): Promise<void> {
       .toJSON(),
 
     new SlashCommandBuilder()
+      .setName("play")
+      .setDescription("Play audio from a direct media URL")
+      .addStringOption((option) =>
+        option
+          .setName("url")
+          .setDescription(
+            "Direct audio URL, for example an MP3, OGG, WEBM, or stream URL",
+          )
+          .setRequired(true),
+      )
+      .toJSON(),
+
+    new SlashCommandBuilder()
       .setName("leave")
       .setDescription("Leave the voice channel.")
+      .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("stop")
+      .setDescription("Stop the current playback")
       .toJSON(),
   ];
 
