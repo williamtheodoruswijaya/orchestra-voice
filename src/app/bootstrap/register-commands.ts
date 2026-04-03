@@ -23,6 +23,16 @@ async function main(): Promise<void> {
       .setName("ping")
       .setDescription("Check whether the bot is responding!")
       .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("join")
+      .setDescription("Join the voice channel you are currently in.")
+      .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("leave")
+      .setDescription("Leave the voice channel.")
+      .toJSON(),
   ];
 
   const rest = new REST({ version: "10" }).setToken(token);
