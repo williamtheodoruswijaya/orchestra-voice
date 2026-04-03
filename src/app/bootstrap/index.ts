@@ -6,6 +6,7 @@ import { LeaveVoiceChannel } from "../../application/use-cases/LeaveVoiceChannel
 import { createDiscordClient } from "../../infrastructure/discord/client/createDiscordClient";
 import { DiscordVoiceGateway } from "../../infrastructure/voice/DiscordVoiceGateway";
 import { StartPlayback } from "../../application/use-cases/StartPlayback";
+import { StopPlayback } from "../../application/use-cases/StopPlayback";
 
 async function main(): Promise<void> {
   const token = process.env.DISCORD_TOKEN;
@@ -20,6 +21,7 @@ async function main(): Promise<void> {
   const joinVoiceChannelUseCase = new JoinVoiceChannel(voiceGateway);
   const leaveVoiceChannelUseCase = new LeaveVoiceChannel(voiceGateway);
   const startPlaybackUseCase = new StartPlayback(voiceGateway);
+  const stopPlaybackUseCase = new StopPlayback(voiceGateway);
 
   client.once(Events.ClientReady, (readyClient) => {
     console.log(`Logged in as ${readyClient.user.tag}`);
@@ -105,7 +107,9 @@ async function main(): Promise<void> {
       }
 
       if (interaction.commandName === "stop") {
-        await voiceGateway.stop(interaction.guildId!);
+        await interaction.deferReply({ ephemeral: true });
+
+        await stopPlaybackUseCase.execute(interaction.guildId!);
 
         await interaction.editReply({
           content: "Playback stopped.",
