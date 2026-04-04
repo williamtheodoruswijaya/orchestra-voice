@@ -41,13 +41,13 @@ async function main(): Promise<void> {
       if (!interaction.inGuild()) {
         await interaction.reply({
           content: "This command can only be used inside a server.",
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
         return;
       }
 
       if (interaction.commandName === "join") {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         const member = interaction.member as GuildMember;
         const voiceChannel = member.voice.channel;
@@ -66,9 +66,7 @@ async function main(): Promise<void> {
             .voiceAdapterCreator as DiscordGatewayAdapterCreator,
         });
 
-        await interaction.editReply({
-          content: `Joined **${voiceChannel.name}**.`,
-        });
+        await interaction.editReply(`Joined **${voiceChannel.name}**.`);
         return;
       }
 
@@ -100,47 +98,53 @@ async function main(): Promise<void> {
           title: url,
         });
 
-        await interaction.editReply({
-          content: `Started playing audio from:\n${url}`,
-        });
+        await interaction.editReply(`Started playing audio from:\n${url}`);
         return;
       }
 
       if (interaction.commandName === "stop") {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         await stopPlaybackUseCase.execute(interaction.guildId!);
 
-        await interaction.editReply({
-          content: "Playback stopped.",
-        });
+        await interaction.editReply("Playback stopped.");
         return;
       }
 
       if (interaction.commandName === "leave") {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
         await leaveVoiceChannelUseCase.execute(interaction.guildId!);
 
-        await interaction.reply({
-          content: "Left the voice channel.",
-          ephemeral: true,
-        });
+        await interaction.editReply("Left the voice channel.");
         return;
       }
     } catch (error) {
       console.error("Interaction handler error:", error);
 
-      if (interaction.isRepliable()) {
-        if (interaction.replied || interaction.deferred) {
-          await interaction.followUp({
-            content: "Something went wrong while handling the command.",
-            ephemeral: true,
-          });
-        } else {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Something went wrong while handling the command.";
+
+      try {
+        if (interaction.isChatInputCommand()) {
+          if (interaction.deferred || interaction.replied) {
+            await interaction.editReply(message);
+          } else {
+            await interaction.reply({
+              content: message,
+              flags: MessageFlags.Ephemeral,
+            });
+          }
+        } else if (interaction.isRepliable()) {
           await interaction.reply({
-            content: "Something went wrong while handling the command.",
-            ephemeral: true,
+            content: message,
+            flags: MessageFlags.Ephemeral,
           });
         }
+      } catch (replyError) {
+        console.error("Failed to send interaction error response:", replyError);
       }
     }
   });

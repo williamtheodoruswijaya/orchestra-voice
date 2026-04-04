@@ -1,47 +1,21 @@
+import { Readable } from "node:stream";
 import {
   AudioPlayer,
   AudioPlayerStatus,
+  NoSubscriberBehavior,
+  VoiceConnectionStatus,
   createAudioPlayer,
   createAudioResource,
   demuxProbe,
   entersState,
   getVoiceConnection,
   joinVoiceChannel,
-  NoSubscriberBehavior,
-  VoiceConnectionStatus,
 } from "@discordjs/voice";
 import {
   JoinVoiceRequest,
   PlayAudioRequest,
   VoiceGatewayPort,
 } from "../../application/ports/outbound/VoiceGatewayPort";
-import { Readable } from "node:stream";
-
-const FETCH_TIMEOUT_MS = 10_000;
-// Covers RFC-1918, loopback, link-local (IPv4 + IPv6), and IPv6 ULA ranges.
-// Note: hostname-only validation cannot fully prevent DNS-rebinding attacks.
-const PRIVATE_IP_PATTERN =
-  /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1$|[fF][cCdD][0-9a-fA-F]{2}:|[fF][eE]80:)/i;
-
-function validateAudioUrl(rawUrl: string): URL {
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    throw new Error("Invalid URL provided.");
-  }
-
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error("Only http and https URLs are allowed.");
-  }
-
-  const hostname = parsed.hostname;
-  if (PRIVATE_IP_PATTERN.test(hostname)) {
-    throw new Error("URLs pointing to private or loopback addresses are not allowed.");
-  }
-
-  return parsed;
-}
 
 export class DiscordVoiceGateway implements VoiceGatewayPort {
   private readonly players = new Map<string, AudioPlayer>();
@@ -79,6 +53,14 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
     const existingConnection = getVoiceConnection(request.guildId);
 
     if (existingConnection) {
+      const currentChannelId = existingConnection.joinConfig.channelId;
+
+      if (currentChannelId === request.channelId) {
+        const player = this.getOrCreatePlayer(request.guildId);
+        existingConnection.subscribe(player);
+        return;
+      }
+
       existingConnection.destroy();
     }
 
@@ -89,7 +71,20 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
       selfDeaf: true,
     });
 
-    await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+    connection.on("stateChange", (oldState, newState) => {
+      console.log(
+        `[Voice:${request.guildId}] ${oldState.status} -> ${newState.status}`,
+      );
+    });
+
+    try {
+      await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+    } catch {
+      connection.destroy();
+      throw new Error(
+        "Failed to join the voice channel. Check bot permissions, channel access, and network/firewall.",
+      );
+    }
 
     const player = this.getOrCreatePlayer(request.guildId);
     connection.subscribe(player);
@@ -99,37 +94,31 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
     const connection = getVoiceConnection(request.guildId);
 
     if (!connection) {
-      throw new Error("Bot is not connected to a voice channel in this guild.");
+      throw new Error(
+        "Bot is not connected to a voice channel yet. Use /join first.",
+      );
     }
 
-    const validatedUrl = validateAudioUrl(request.url);
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-    let response: Response;
-    try {
-      response = await fetch(validatedUrl.toString(), { signal: controller.signal });
-    } finally {
-      clearTimeout(timeout);
-    }
+    const response = await fetch(request.url);
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch audio from URL: ${response.statusText}`);
+      throw new Error(
+        `Failed to fetch audio URL. HTTP status: ${response.status}`,
+      );
     }
 
     if (!response.body) {
-      throw new Error("Response body is null.");
+      throw new Error("Audio response does not contain a readable body.");
     }
 
-    const inputStream = Readable.fromWeb(
-      response.body as ReadableStream<Uint8Array>,
-    );
+    const inputStream = Readable.fromWeb(response.body as never);
     const { stream, type } = await demuxProbe(inputStream);
 
     const resource = createAudioResource(stream, {
       inputType: type,
-      metadata: { title: request.title ?? request.url },
+      metadata: {
+        title: request.title ?? request.url,
+      },
     });
 
     const player = this.getOrCreatePlayer(request.guildId);
@@ -139,8 +128,9 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
 
   async leave(guildId: string): Promise<void> {
     const player = this.players.get(guildId);
+
     if (player) {
-      player.stop();
+      player.stop(true);
       this.players.delete(guildId);
     }
 
