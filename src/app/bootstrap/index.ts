@@ -7,6 +7,8 @@ import { createDiscordClient } from "../../infrastructure/discord/client/createD
 import { DiscordVoiceGateway } from "../../infrastructure/voice/DiscordVoiceGateway";
 import { StartPlayback } from "../../application/use-cases/StartPlayback";
 import { StopPlayback } from "../../application/use-cases/StopPlayback";
+import { SearchTracks } from "../../application/use-cases/SearchTracks";
+import { YouTubeCatalogAdapter } from "../../infrastructure/providers/youtube/YouTubeCatalogAdapter";
 
 async function main(): Promise<void> {
   const token = process.env.DISCORD_TOKEN;
@@ -18,6 +20,9 @@ async function main(): Promise<void> {
   const client = createDiscordClient();
 
   const voiceGateway = new DiscordVoiceGateway();
+  const youtubeApiKey = process.env.YOUTUBE_API_KEY ?? "";
+  const youtubeCatalog = new YouTubeCatalogAdapter(youtubeApiKey);
+  const searchTracksUseCase = new SearchTracks(youtubeCatalog);
   const joinVoiceChannelUseCase = new JoinVoiceChannel(voiceGateway);
   const leaveVoiceChannelUseCase = new LeaveVoiceChannel(voiceGateway);
   const startPlaybackUseCase = new StartPlayback(voiceGateway);
@@ -41,13 +46,13 @@ async function main(): Promise<void> {
       if (!interaction.inGuild()) {
         await interaction.reply({
           content: "This command can only be used inside a server.",
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
         return;
       }
 
       if (interaction.commandName === "join") {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         const member = interaction.member as GuildMember;
         const voiceChannel = member.voice.channel;
@@ -66,9 +71,7 @@ async function main(): Promise<void> {
             .voiceAdapterCreator as DiscordGatewayAdapterCreator,
         });
 
-        await interaction.editReply({
-          content: `Joined **${voiceChannel.name}**.`,
-        });
+        await interaction.editReply(`Joined **${voiceChannel.name}**.`);
         return;
       }
 
@@ -100,47 +103,74 @@ async function main(): Promise<void> {
           title: url,
         });
 
-        await interaction.editReply({
-          content: `Started playing audio from:\n${url}`,
-        });
+        await interaction.editReply(`Started playing audio from:\n${url}`);
         return;
       }
 
       if (interaction.commandName === "stop") {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         await stopPlaybackUseCase.execute(interaction.guildId!);
 
-        await interaction.editReply({
-          content: "Playback stopped.",
-        });
+        await interaction.editReply("Playback stopped.");
         return;
       }
 
       if (interaction.commandName === "leave") {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
         await leaveVoiceChannelUseCase.execute(interaction.guildId!);
 
-        await interaction.reply({
-          content: "Left the voice channel.",
-          ephemeral: true,
+        await interaction.editReply("Left the voice channel.");
+        return;
+      }
+
+      if (interaction.commandName === "search") {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+        const query = interaction.options.getString("query", true);
+        const tracks = await searchTracksUseCase.execute(query);
+
+        if (tracks.length === 0) {
+          await interaction.editReply(`No results found for: ${query}`);
+          return;
+        }
+
+        const lines = tracks.map((track, index) => {
+          return `${index + 1}. **${track.title}**
+Channel: ${track.artist ?? "Unknown"}
+URL: ${track.pageUrl ?? "-"}`;
         });
+
+        await interaction.editReply(lines.join("\n\n"));
         return;
       }
     } catch (error) {
       console.error("Interaction handler error:", error);
 
-      if (interaction.isRepliable()) {
-        if (interaction.replied || interaction.deferred) {
-          await interaction.followUp({
-            content: "Something went wrong while handling the command.",
-            ephemeral: true,
-          });
-        } else {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Something went wrong while handling the command.";
+
+      try {
+        if (interaction.isChatInputCommand()) {
+          if (interaction.deferred || interaction.replied) {
+            await interaction.editReply(message);
+          } else {
+            await interaction.reply({
+              content: message,
+              flags: MessageFlags.Ephemeral,
+            });
+          }
+        } else if (interaction.isRepliable()) {
           await interaction.reply({
-            content: "Something went wrong while handling the command.",
-            ephemeral: true,
+            content: message,
+            flags: MessageFlags.Ephemeral,
           });
         }
+      } catch (replyError) {
+        console.error("Failed to send interaction error response:", replyError);
       }
     }
   });

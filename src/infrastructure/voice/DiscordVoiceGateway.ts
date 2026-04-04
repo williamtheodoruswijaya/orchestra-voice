@@ -1,27 +1,23 @@
+import { Readable } from "node:stream";
 import {
   AudioPlayer,
   AudioPlayerStatus,
+  NoSubscriberBehavior,
+  VoiceConnectionStatus,
   createAudioPlayer,
   createAudioResource,
   demuxProbe,
   entersState,
   getVoiceConnection,
   joinVoiceChannel,
-  NoSubscriberBehavior,
-  VoiceConnectionStatus,
 } from "@discordjs/voice";
 import {
   JoinVoiceRequest,
   PlayAudioRequest,
   VoiceGatewayPort,
 } from "../../application/ports/outbound/VoiceGatewayPort";
-import { Readable } from "node:stream";
 
-const FETCH_TIMEOUT_MS = 10_000;
-// Covers RFC-1918, loopback, link-local (IPv4 + IPv6), and IPv6 ULA ranges.
-// Note: hostname-only validation cannot fully prevent DNS-rebinding attacks.
-const PRIVATE_IP_PATTERN =
-  /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1$|[fF][cCdD][0-9a-fA-F]{2}:|[fF][eE]80:)/i;
+const AUDIO_FETCH_TIMEOUT_MS = 10_000;
 
 function validateAudioUrl(rawUrl: string): URL {
   let parsed: URL;
@@ -35,9 +31,45 @@ function validateAudioUrl(rawUrl: string): URL {
     throw new Error("Only http and https URLs are allowed.");
   }
 
-  const hostname = parsed.hostname;
-  if (PRIVATE_IP_PATTERN.test(hostname)) {
-    throw new Error("URLs pointing to private or loopback addresses are not allowed.");
+  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+
+  const blockedHostnames = ["localhost", "ip6-localhost", "ip6-loopback"];
+  if (blockedHostnames.includes(hostname)) {
+    throw new Error("Requests to private or internal addresses are not allowed.");
+  }
+
+  const ipv4Parts = hostname.split(".");
+  if (
+    ipv4Parts.length === 4 &&
+    ipv4Parts.every((p) => /^\d+$/.test(p))
+  ) {
+    const octets = ipv4Parts.map(Number);
+    if (octets.some((o) => o > 255)) {
+      throw new Error("Invalid IP address.");
+    }
+    const [a, b] = octets;
+    if (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 169 && b === 254) ||
+      (a === 100 && b >= 64 && b <= 127)
+    ) {
+      throw new Error(
+        "Requests to private or internal addresses are not allowed.",
+      );
+    }
+  }
+
+  if (
+    hostname === "::1" ||
+    hostname === "::" ||
+    /^fe80:[0-9a-f:]+$/i.test(hostname) ||
+    /^f[cd][0-9a-f]{2}:[0-9a-f:]+$/i.test(hostname)
+  ) {
+    throw new Error("Requests to private or internal addresses are not allowed.");
   }
 
   return parsed;
@@ -79,6 +111,14 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
     const existingConnection = getVoiceConnection(request.guildId);
 
     if (existingConnection) {
+      const currentChannelId = existingConnection.joinConfig.channelId;
+
+      if (currentChannelId === request.channelId) {
+        const player = this.getOrCreatePlayer(request.guildId);
+        existingConnection.subscribe(player);
+        return;
+      }
+
       existingConnection.destroy();
     }
 
@@ -89,7 +129,22 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
       selfDeaf: true,
     });
 
-    await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+    if (process.env.DISCORD_VOICE_DEBUG === "true") {
+      connection.on("stateChange", (oldState, newState) => {
+        console.log(
+          `[Voice:${request.guildId}] ${oldState.status} -> ${newState.status}`,
+        );
+      });
+    }
+
+    try {
+      await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+    } catch {
+      connection.destroy();
+      throw new Error(
+        "Failed to join the voice channel. Check bot permissions, channel access, and network/firewall.",
+      );
+    }
 
     const player = this.getOrCreatePlayer(request.guildId);
     connection.subscribe(player);
@@ -99,37 +154,53 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
     const connection = getVoiceConnection(request.guildId);
 
     if (!connection) {
-      throw new Error("Bot is not connected to a voice channel in this guild.");
+      throw new Error(
+        "Bot is not connected to a voice channel yet. Use /join first.",
+      );
     }
 
     const validatedUrl = validateAudioUrl(request.url);
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const timeout = setTimeout(
+      () => controller.abort(),
+      AUDIO_FETCH_TIMEOUT_MS,
+    );
 
     let response: Response;
     try {
-      response = await fetch(validatedUrl.toString(), { signal: controller.signal });
+      response = await fetch(validatedUrl.toString(), {
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error("Audio fetch timed out. Please try again.");
+      }
+      throw new Error("Failed to fetch audio URL. Please try again.");
     } finally {
       clearTimeout(timeout);
     }
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch audio from URL: ${response.statusText}`);
+      throw new Error(
+        `Failed to fetch audio URL. HTTP status: ${response.status}`,
+      );
     }
 
     if (!response.body) {
-      throw new Error("Response body is null.");
+      throw new Error("Audio response does not contain a readable body.");
     }
 
     const inputStream = Readable.fromWeb(
-      response.body as ReadableStream<Uint8Array>,
+      response.body as unknown as Parameters<typeof Readable.fromWeb>[0],
     );
     const { stream, type } = await demuxProbe(inputStream);
 
     const resource = createAudioResource(stream, {
       inputType: type,
-      metadata: { title: request.title ?? request.url },
+      metadata: {
+        title: request.title ?? request.url,
+      },
     });
 
     const player = this.getOrCreatePlayer(request.guildId);
@@ -139,8 +210,9 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
 
   async leave(guildId: string): Promise<void> {
     const player = this.players.get(guildId);
+
     if (player) {
-      player.stop();
+      player.stop(true);
       this.players.delete(guildId);
     }
 
