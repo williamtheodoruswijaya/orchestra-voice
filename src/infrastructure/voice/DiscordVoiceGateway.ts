@@ -17,6 +17,61 @@ import {
   VoiceGatewayPort,
 } from "../../application/ports/outbound/VoiceGatewayPort";
 
+const AUDIO_FETCH_TIMEOUT_MS = 10_000;
+
+function validateAudioUrl(rawUrl: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error("Invalid URL provided.");
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Only http and https URLs are allowed.");
+  }
+
+  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+
+  const blockedHostnames = ["localhost", "ip6-localhost", "ip6-loopback"];
+  if (blockedHostnames.includes(hostname)) {
+    throw new Error("Requests to private or internal addresses are not allowed.");
+  }
+
+  const ipv4Parts = hostname.split(".");
+  if (
+    ipv4Parts.length === 4 &&
+    ipv4Parts.every((p) => /^\d+$/.test(p))
+  ) {
+    const [a, b] = ipv4Parts.map(Number);
+    if (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 169 && b === 254) ||
+      (a === 100 && b >= 64 && b <= 127)
+    ) {
+      throw new Error(
+        "Requests to private or internal addresses are not allowed.",
+      );
+    }
+  }
+
+  if (
+    hostname === "::1" ||
+    hostname === "::" ||
+    hostname.startsWith("fe80:") ||
+    hostname.startsWith("fc") ||
+    hostname.startsWith("fd")
+  ) {
+    throw new Error("Requests to private or internal addresses are not allowed.");
+  }
+
+  return parsed;
+}
+
 export class DiscordVoiceGateway implements VoiceGatewayPort {
   private readonly players = new Map<string, AudioPlayer>();
 
@@ -101,7 +156,29 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
       );
     }
 
-    const response = await fetch(request.url);
+    const validatedUrl = validateAudioUrl(request.url);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      AUDIO_FETCH_TIMEOUT_MS,
+    );
+
+    let response: Response;
+    try {
+      response = await fetch(validatedUrl.toString(), {
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error("Audio fetch timed out. Please try again.");
+      }
+      throw new Error(
+        `Failed to fetch audio URL. ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (!response.ok) {
       throw new Error(
@@ -114,7 +191,7 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
     }
 
     const inputStream = Readable.fromWeb(
-      response.body as unknown as ReadableStream<Uint8Array>,
+      response.body as unknown as Parameters<typeof Readable.fromWeb>[0],
     );
     const { stream, type } = await demuxProbe(inputStream);
 
