@@ -62,9 +62,10 @@ function validateAudioUrl(rawUrl: string): URL {
   if (
     hostname === "::1" ||
     hostname === "::" ||
-    hostname.startsWith("fe80:") ||
-    hostname.startsWith("fc") ||
-    hostname.startsWith("fd")
+    (hostname.includes(":") &&
+      (hostname.startsWith("fe80:") ||
+        hostname.startsWith("fc") ||
+        hostname.startsWith("fd")))
   ) {
     throw new Error("Requests to private or internal addresses are not allowed.");
   }
