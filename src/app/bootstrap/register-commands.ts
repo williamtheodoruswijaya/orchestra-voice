@@ -51,6 +51,17 @@ async function main(): Promise<void> {
       .setName("stop")
       .setDescription("Stop the current playback")
       .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("search")
+      .setDescription("Search YouTube videos by keyword")
+      .addStringOption((option) =>
+        option
+          .setName("query")
+          .setDescription("Song title, artist, or keywords")
+          .setRequired(true),
+      )
+      .toJSON(),
   ];
 
   const rest = new REST({ version: "10" }).setToken(token);
