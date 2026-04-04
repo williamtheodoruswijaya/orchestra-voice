@@ -43,7 +43,11 @@ function validateAudioUrl(rawUrl: string): URL {
     ipv4Parts.length === 4 &&
     ipv4Parts.every((p) => /^\d+$/.test(p))
   ) {
-    const [a, b] = ipv4Parts.map(Number);
+    const octets = ipv4Parts.map(Number);
+    if (octets.some((o) => o > 255)) {
+      throw new Error("Invalid IP address.");
+    }
+    const [a, b] = octets;
     if (
       a === 0 ||
       a === 10 ||
@@ -62,8 +66,8 @@ function validateAudioUrl(rawUrl: string): URL {
   if (
     hostname === "::1" ||
     hostname === "::" ||
-    /^fe80:/i.test(hostname) ||
-    /^f[cd][0-9a-f]{2}:/i.test(hostname)
+    /^fe80:[0-9a-f:]+$/i.test(hostname) ||
+    /^f[cd][0-9a-f]{2}:[0-9a-f:]+$/i.test(hostname)
   ) {
     throw new Error("Requests to private or internal addresses are not allowed.");
   }
@@ -172,9 +176,7 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
       if (error instanceof Error && error.name === "AbortError") {
         throw new Error("Audio fetch timed out. Please try again.");
       }
-      throw new Error(
-        `Failed to fetch audio URL. ${error instanceof Error ? error.message : String(error)}`,
-      );
+      throw new Error("Failed to fetch audio URL. Please try again.");
     } finally {
       clearTimeout(timeout);
     }
