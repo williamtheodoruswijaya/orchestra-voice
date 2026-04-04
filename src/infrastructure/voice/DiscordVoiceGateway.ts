@@ -111,7 +111,9 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
       throw new Error("Audio response does not contain a readable body.");
     }
 
-    const inputStream = Readable.fromWeb(response.body as never);
+    const inputStream = Readable.fromWeb(
+      response.body as unknown as ReadableStream<Uint8Array>,
+    );
     const { stream, type } = await demuxProbe(inputStream);
 
     const resource = createAudioResource(stream, {
