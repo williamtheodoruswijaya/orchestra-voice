@@ -71,11 +71,13 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
       selfDeaf: true,
     });
 
-    connection.on("stateChange", (oldState, newState) => {
-      console.log(
-        `[Voice:${request.guildId}] ${oldState.status} -> ${newState.status}`,
-      );
-    });
+    if (process.env.DISCORD_VOICE_DEBUG === "true") {
+      connection.on("stateChange", (oldState, newState) => {
+        console.log(
+          `[Voice:${request.guildId}] ${oldState.status} -> ${newState.status}`,
+        );
+      });
+    }
 
     try {
       await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
