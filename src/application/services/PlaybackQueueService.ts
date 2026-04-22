@@ -7,7 +7,11 @@ import {
 import type { Track } from "../../domain/entities/Track";
 import { TrackSimilarityScorer } from "../../domain/services/TrackSimilarityScorer";
 import type { GuildPlaybackSettingsRepositoryPort } from "../ports/outbound/GuildPlaybackSettingsRepositoryPort";
-import type { MusicCatalogPort } from "../ports/outbound/MusicCatalogPort";
+import type {
+  MusicCatalogPort,
+  MusicCatalogSearchResult,
+  ProviderSearchStatus,
+} from "../ports/outbound/MusicCatalogPort";
 import type { QueueRepositoryPort } from "../ports/outbound/QueueRepositoryPort";
 import type {
   ResolvedAudioSource,
@@ -46,11 +50,24 @@ export interface PlayNowResult extends QueueMutationResult {
   resolvedAudioSource: ResolvedAudioSource;
 }
 
+export type AutoplayContinuationStatus =
+  | "not-needed"
+  | "disabled"
+  | "no-candidate"
+  | "provider-unavailable"
+  | "provider-on-cooldown"
+  | "metadata-only"
+  | "playback-failed"
+  | "playable-continuation";
+
 export interface AdvancePlaybackResult extends QueueMutationResult {
   nextItem?: QueueItem;
   resolvedAudioSource?: ResolvedAudioSource;
   autoplayStarted: boolean;
+  autoplayStatus: AutoplayContinuationStatus;
   relatedCandidate?: Track;
+  providerStatuses?: ProviderSearchStatus[];
+  autoplayFailureMessage?: string;
 }
 
 export interface RemoveQueueItemResult extends QueueMutationResult {
@@ -69,6 +86,17 @@ interface PlaybackQueueServiceOptions {
   settingsRepository?: GuildPlaybackSettingsRepositoryPort;
   similarityScorer?: TrackSimilarityScorer;
   relatedScoreThreshold?: number;
+}
+
+interface RelatedTrackLookupResult {
+  status:
+    | "disabled"
+    | "no-candidate"
+    | "provider-unavailable"
+    | "provider-on-cooldown"
+    | "candidate";
+  candidate?: Track;
+  providerStatuses: ProviderSearchStatus[];
 }
 
 export class PlaybackQueueService {
@@ -184,6 +212,7 @@ export class PlaybackQueueService {
       return {
         queue: queue.toState(),
         autoplayStarted: false,
+        autoplayStatus: "not-needed",
       };
     }
 
@@ -191,26 +220,55 @@ export class PlaybackQueueService {
     const nextItem = queue.finishCurrent();
 
     if (!nextItem) {
-      const relatedCandidate = await this.findRelatedTrack(
+      const relatedLookup = await this.findRelatedTrack(
         guildId,
         finishedItem.track,
       );
 
-      if (!relatedCandidate) {
+      if (!relatedLookup.candidate) {
+        const autoplayStatus =
+          relatedLookup.status === "candidate"
+            ? "no-candidate"
+            : relatedLookup.status;
         await this.queueRepository.save(queue);
         return {
           queue: queue.toState(),
           autoplayStarted: false,
+          autoplayStatus,
+          providerStatuses: relatedLookup.providerStatuses,
         };
       }
 
-      const relatedItem = this.createQueueItem(guildId, relatedCandidate);
-      queue.enqueue(relatedItem);
-      queue.startNext();
+      const relatedItem = this.createQueueItem(guildId, relatedLookup.candidate);
       await this.queueRepository.save(queue);
 
+      let resolvedAudioSource: ResolvedAudioSource;
       try {
-        const resolvedAudioSource = await this.playItem(guildId, relatedItem);
+        resolvedAudioSource = await this.streamResolver.resolve(
+          relatedItem.track,
+        );
+      } catch (error) {
+        await this.queueRepository.save(queue);
+        return {
+          queue: queue.toState(),
+          autoplayStarted: false,
+          autoplayStatus: "metadata-only",
+          relatedCandidate: relatedLookup.candidate,
+          providerStatuses: relatedLookup.providerStatuses,
+          autoplayFailureMessage:
+            error instanceof Error
+              ? error.message
+              : "The related metadata result could not be resolved to audio.",
+        };
+      }
+
+      try {
+        await this.voiceGateway.play({
+          guildId,
+          ...resolvedAudioSource,
+        });
+
+        queue.playNow(relatedItem);
         await this.queueRepository.save(queue);
 
         return {
@@ -218,12 +276,24 @@ export class PlaybackQueueService {
           resolvedAudioSource,
           queue: queue.toState(),
           autoplayStarted: true,
-          relatedCandidate,
+          autoplayStatus: "playable-continuation",
+          relatedCandidate: relatedLookup.candidate,
+          providerStatuses: relatedLookup.providerStatuses,
         };
       } catch (error) {
-        queue.rollbackCurrentToFront();
         await this.queueRepository.save(queue);
-        throw error;
+        return {
+          queue: queue.toState(),
+          autoplayStarted: false,
+          autoplayStatus: "playback-failed",
+          relatedCandidate: relatedLookup.candidate,
+          resolvedAudioSource,
+          providerStatuses: relatedLookup.providerStatuses,
+          autoplayFailureMessage:
+            error instanceof Error
+              ? error.message
+              : "The related track resolved to audio but playback did not start.",
+        };
       }
     }
 
@@ -238,6 +308,7 @@ export class PlaybackQueueService {
         resolvedAudioSource,
         queue: queue.toState(),
         autoplayStarted: false,
+        autoplayStatus: "not-needed",
       };
     } catch (error) {
       queue.rollbackCurrentToFront();
@@ -256,6 +327,7 @@ export class PlaybackQueueService {
       return {
         queue: queue.toState(),
         autoplayStarted: false,
+        autoplayStatus: "not-needed",
       };
     }
 
@@ -270,6 +342,7 @@ export class PlaybackQueueService {
         resolvedAudioSource,
         queue: queue.toState(),
         autoplayStarted: false,
+        autoplayStatus: "not-needed",
       };
     } catch (error) {
       queue.rollbackCurrentToFront();
@@ -362,21 +435,39 @@ export class PlaybackQueueService {
   private async findRelatedTrack(
     guildId: string,
     reference: Track,
-  ): Promise<Track | undefined> {
+  ): Promise<RelatedTrackLookupResult> {
     if (!this.relatedCatalog || !this.settingsRepository) {
-      return undefined;
+      return {
+        status: "disabled",
+        providerStatuses: [],
+      };
     }
 
     const settings = await this.settingsRepository.getByGuildId(guildId);
 
     if (settings.autoplayMode !== "related") {
-      return undefined;
+      return {
+        status: "disabled",
+        providerStatuses: [],
+      };
     }
 
     const query = reference.artist
       ? `${reference.artist} ${reference.title}`
       : reference.title;
-    const candidates = await this.relatedCatalog.search(query);
+    const searchResult = await this.searchRelatedCatalog(query);
+    const candidates = searchResult.tracks;
+    const noCandidateStatus = this.getNoCandidateStatus(
+      searchResult.providerStatuses,
+    );
+
+    if (candidates.length === 0) {
+      return {
+        status: noCandidateStatus,
+        providerStatuses: searchResult.providerStatuses,
+      };
+    }
+
     const [bestCandidate] = this.similarityScorer.rank(
       reference,
       candidates,
@@ -384,10 +475,59 @@ export class PlaybackQueueService {
     );
 
     if (!bestCandidate || bestCandidate.score < this.relatedScoreThreshold) {
-      return undefined;
+      return {
+        status: "no-candidate",
+        providerStatuses: searchResult.providerStatuses,
+      };
     }
 
-    return bestCandidate.track;
+    return {
+      status: "candidate",
+      candidate: bestCandidate.track,
+      providerStatuses: searchResult.providerStatuses,
+    };
+  }
+
+  private async searchRelatedCatalog(
+    query: string,
+  ): Promise<MusicCatalogSearchResult> {
+    if (!this.relatedCatalog) {
+      return {
+        tracks: [],
+        providerStatuses: [],
+      };
+    }
+
+    if (this.relatedCatalog.searchDetailed) {
+      return this.relatedCatalog.searchDetailed(query);
+    }
+
+    const tracks = await this.relatedCatalog.search(query);
+
+    return {
+      tracks,
+      providerStatuses: [],
+    };
+  }
+
+  private getNoCandidateStatus(
+    statuses: ProviderSearchStatus[],
+  ): RelatedTrackLookupResult["status"] {
+    if (statuses.length === 0) {
+      return "no-candidate";
+    }
+
+    const fulfilled = statuses.filter((status) => status.status === "fulfilled");
+
+    if (fulfilled.length > 0) {
+      return "no-candidate";
+    }
+
+    if (statuses.every((status) => status.status === "skipped")) {
+      return "provider-on-cooldown";
+    }
+
+    return "provider-unavailable";
   }
 
   private createQueueItem(

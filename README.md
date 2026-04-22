@@ -17,6 +17,8 @@ YouTube watch pages and Spotify track pages are not treated as direct audio. Spo
 
 The bot is designed for persistent voice presence and does not auto-leave on idle by default.
 
+Provider failures are expected operational states. Spotify account or market restrictions, YouTube quota exhaustion, missing credentials, rate limits, and upstream outages are classified and cooled down so related autoplay does not retry the same failing path on every queue end.
+
 ## Requirements
 
 - Node.js 20 or newer
@@ -24,6 +26,23 @@ The bot is designed for persistent voice presence and does not auto-leave on idl
 - `yt-dlp` installed and available on `PATH`, or configured with `YT_DLP_PATH`
 
 The project uses `ffmpeg-static`, so a separate system ffmpeg install is not required for normal playback.
+
+## Runtime model
+
+Local source-run development uses:
+
+```bash
+npm run dev
+```
+
+Long-running deployments should build first and then run the compiled entrypoint:
+
+```bash
+npm run build
+npm start
+```
+
+`npm start` runs `node dist/app/bootstrap/index.js`. The Dockerfile follows this build-run model and installs `yt-dlp` in the image. If your host does not provide `yt-dlp` on `PATH`, set `YT_DLP_PATH`.
 
 ## Setup
 
@@ -64,6 +83,8 @@ npm run register:commands
 npm run dev
 ```
 
+For production-like hosting, use `npm run build` followed by `npm start` instead.
+
 ## Commands
 
 - `/join` joins your current voice channel.
@@ -99,3 +120,9 @@ or download the executable from the [yt-dlp releases page](https://github.com/yt
 ```bash
 YT_DLP_PATH=C:\path\to\yt-dlp.exe
 ```
+
+## Autoplay and provider failures
+
+Related autoplay is opt-in per server and bounded to one lookup/continuation attempt for the queue-end transition. If providers are unavailable or on cooldown, continuation stops cleanly and the bot may remain connected to the voice channel.
+
+Autoplay distinguishes no related candidate, provider unavailable, provider on cooldown, metadata-only suggestion, playback failure, and playable continuation. Metadata-only suggestions are not queued as fake audio.

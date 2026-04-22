@@ -1,5 +1,10 @@
 import { Track } from "../../domain/entities/Track";
-import { MusicCatalogPort } from "../../application/ports/outbound/MusicCatalogPort";
+import {
+  MusicCatalogPort,
+  MusicCatalogSearchResult,
+  ProviderSearchStatus,
+} from "../../application/ports/outbound/MusicCatalogPort";
+import { classifyProviderFailure } from "../../application/services/ProviderFailureClassifier";
 
 export class CompositeMusicCatalogAdapter implements MusicCatalogPort {
   constructor(
@@ -8,20 +13,60 @@ export class CompositeMusicCatalogAdapter implements MusicCatalogPort {
   ) {}
 
   async search(query: string): Promise<Track[]> {
-    const settledResults = await Promise.allSettled(
-      this.providers.map((provider) => provider.search(query)),
+    const result = await this.searchDetailed(query);
+    return result.tracks;
+  }
+
+  async searchDetailed(query: string): Promise<MusicCatalogSearchResult> {
+    const settledResults = await Promise.all(
+      this.providers.map((provider) => this.searchProvider(provider, query)),
     );
 
     const merged: Track[] = [];
+    const providerStatuses: ProviderSearchStatus[] = [];
 
     for (const result of settledResults) {
-      if (result.status === "fulfilled") {
-        merged.push(...result.value);
-      } else {
-        console.error("Composite search provider failed:", result.reason);
-      }
+      merged.push(...result.tracks);
+      providerStatuses.push(...result.providerStatuses);
     }
 
-    return merged.slice(0, this.limit);
+    return {
+      tracks: merged.slice(0, this.limit),
+      providerStatuses,
+    };
+  }
+
+  private async searchProvider(
+    provider: MusicCatalogPort,
+    query: string,
+  ): Promise<MusicCatalogSearchResult> {
+    try {
+      if (provider.searchDetailed) {
+        return provider.searchDetailed(query);
+      }
+
+      const tracks = await provider.search(query);
+      return {
+        tracks,
+        providerStatuses: [
+          {
+            provider: "unknown",
+            status: "fulfilled",
+            resultCount: tracks.length,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        tracks: [],
+        providerStatuses: [
+          {
+            provider: "unknown",
+            status: "failed",
+            failure: classifyProviderFailure(error),
+          },
+        ],
+      };
+    }
   }
 }

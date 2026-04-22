@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { Events } from "discord.js";
+import { ProviderCooldownService } from "../../application/services/ProviderCooldownService";
 import { ClearQueue } from "../../application/use-cases/ClearQueue";
 import { EnqueueTrack } from "../../application/use-cases/EnqueueTrack";
 import { GetNowPlaying } from "../../application/use-cases/GetNowPlaying";
@@ -25,40 +26,51 @@ import { PlaybackQueueService } from "../../application/services/PlaybackQueueSe
 import type { SearchProvider } from "../../application/ports/outbound/SearchSessionRepositoryPort";
 import { DiscordInteractionHandler } from "../../infrastructure/discord/DiscordInteractionHandler";
 import { createDiscordClient } from "../../infrastructure/discord/client/createDiscordClient";
+import { PinoLogger } from "../../infrastructure/logging/PinoLogger";
 import { InMemoryGuildPlaybackSettingsRepository } from "../../infrastructure/persistence/memory/InMemoryGuildPlaybackSettingsRepository";
 import { InMemoryGuildQueueRepository } from "../../infrastructure/persistence/memory/InMemoryGuildQueueRepository";
 import { InMemorySearchSessionRepository } from "../../infrastructure/persistence/memory/InMemorySearchSessionRepository";
 import { CompositeMusicCatalogAdapter } from "../../infrastructure/providers/CompositeMusicCatalogAdapter";
+import { ResilientMusicCatalogAdapter } from "../../infrastructure/providers/ResilientMusicCatalogAdapter";
 import { SpotifyCatalogAdapter } from "../../infrastructure/providers/spotify/SpotifyCatalogAdapter";
 import { YouTubeCatalogAdapter } from "../../infrastructure/providers/youtube/YouTubeCatalogAdapter";
 import { DiscordVoiceGateway } from "../../infrastructure/voice/DiscordVoiceGateway";
 import { YtDlpStreamResolver } from "../../infrastructure/voice/YtDlpStreamResolver";
+import { loadBotRuntimeEnv } from "./env";
 
 async function main(): Promise<void> {
-  const token = process.env.DISCORD_TOKEN;
-
-  if (!token) {
-    throw new Error("DISCORD_TOKEN is missing in .env");
-  }
+  const runtimeEnv = loadBotRuntimeEnv();
+  const logger = new PinoLogger();
 
   const client = createDiscordClient();
 
   const voiceGateway = new DiscordVoiceGateway();
-  const youtubeCatalog = new YouTubeCatalogAdapter(
-    process.env.YOUTUBE_API_KEY ?? "",
+  const providerCooldowns = new ProviderCooldownService();
+  const youtubeCatalog = new YouTubeCatalogAdapter(runtimeEnv.youtubeApiKey);
+  const resilientYouTubeCatalog = new ResilientMusicCatalogAdapter(
+    "youtube",
+    youtubeCatalog,
+    providerCooldowns,
+    logger,
   );
   const spotifyCatalog = new SpotifyCatalogAdapter(
-    process.env.SPOTIFY_CLIENT_ID ?? "",
-    process.env.SPOTIFY_CLIENT_SECRET ?? "",
-    process.env.SPOTIFY_MARKET ?? "ID",
+    runtimeEnv.spotifyClientId,
+    runtimeEnv.spotifyClientSecret,
+    runtimeEnv.spotifyMarket,
+  );
+  const resilientSpotifyCatalog = new ResilientMusicCatalogAdapter(
+    "spotify",
+    spotifyCatalog,
+    providerCooldowns,
+    logger,
   );
   const compositeCatalog = new CompositeMusicCatalogAdapter([
-    youtubeCatalog,
-    spotifyCatalog,
+    resilientYouTubeCatalog,
+    resilientSpotifyCatalog,
   ]);
   const streamResolver = new YtDlpStreamResolver({
     spotifyCatalog,
-    ytDlpPath: process.env.YT_DLP_PATH,
+    ytDlpPath: runtimeEnv.ytDlpPath,
   });
   const searchSessions = new InMemorySearchSessionRepository();
   const queueRepository = new InMemoryGuildQueueRepository();
@@ -78,16 +90,29 @@ async function main(): Promise<void> {
 
   const searchTracks: Record<SearchProvider, SearchTracks> = {
     all: new SearchTracks(compositeCatalog),
-    youtube: new SearchTracks(youtubeCatalog),
-    spotify: new SearchTracks(spotifyCatalog),
+    youtube: new SearchTracks(resilientYouTubeCatalog),
+    spotify: new SearchTracks(resilientSpotifyCatalog),
   };
 
   const playNextTrack = new PlayNextTrack(playbackQueueService);
   voiceGateway.onPlaybackFinished(async (guildId) => {
     try {
-      await playNextTrack.execute(guildId);
+      const result = await playNextTrack.execute(guildId);
+      if (
+        result.autoplayStatus !== "not-needed" &&
+        result.autoplayStatus !== "playable-continuation"
+      ) {
+        logger.debug("Autoplay continuation stopped cleanly.", {
+          guildId,
+          status: result.autoplayStatus,
+          providers: result.providerStatuses?.map((status) => status.provider),
+        });
+      }
     } catch (error) {
-      console.error(`[Voice:${guildId}] Failed to autoplay next track:`, error);
+      logger.error("Unexpected playback-finished continuation failure.", {
+        guildId,
+        error,
+      });
     }
   });
 
@@ -114,14 +139,16 @@ async function main(): Promise<void> {
   });
 
   client.once(Events.ClientReady, (readyClient) => {
-    console.log(`Logged in as ${readyClient.user.tag}`);
+    logger.info("Discord bot logged in.", {
+      userTag: readyClient.user.tag,
+    });
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
     await interactionHandler.handle(interaction);
   });
 
-  await client.login(token);
+  await client.login(runtimeEnv.discordToken);
 }
 
 main().catch((error) => {

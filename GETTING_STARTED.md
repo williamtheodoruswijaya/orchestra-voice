@@ -57,6 +57,8 @@ Direct audio URLs are treated as playable only after URL validation.
 
 The UX should stay honest about this distinction. Do not document or implement YouTube/Spotify page URLs as directly playable audio.
 
+Provider failures are normal runtime conditions. YouTube quota exhaustion, Spotify account/subscription or market restrictions, missing credentials, rate limits, and upstream outages are classified explicitly. Search and autoplay use cooldown/backoff state so the bot does not keep calling the same failing provider path on every queue end. During a cooldown, providers are skipped for metadata lookup and the bot keeps running.
+
 ## Local Setup
 
 Install dependencies:
@@ -89,6 +91,36 @@ Optional for playback resolving:
 ```bash
 YT_DLP_PATH=
 ```
+
+`DISCORD_VOICE_DEBUG=false` can be set to `true` for verbose voice connection state logs during debugging.
+
+## Runtime And Deployment
+
+There are two supported startup models:
+
+- Source-run development: `npm run dev`
+- Build-run hosting: `npm run build` followed by `npm start`
+
+The real production entrypoint is:
+
+```bash
+node dist/app/bootstrap/index.js
+```
+
+`npm start` uses that compiled file. Do not run `npm start` before building unless your deployment process already created `dist`.
+
+Long-running hosts should:
+
+1. Use Node.js 20 or newer.
+2. Run from the repository root or an equivalent working directory containing `.env`.
+3. Install dependencies with `npm ci` or `npm install`.
+4. Build with `npm run build`.
+5. Start with `npm start`.
+6. Ensure `yt-dlp` is on `PATH` or set `YT_DLP_PATH`.
+
+The Dockerfile uses Node 22, builds TypeScript into `dist`, installs `ffmpeg` and `yt-dlp`, and starts with `npm run start`.
+
+The bot is intentionally suitable for 24/7 hosting. It may remain online and connected to a voice channel continuously. Idle auto-leave is not enabled by default.
 
 ## Discord Bot Setup
 
@@ -201,9 +233,20 @@ Enqueueing while idle starts playback immediately. Enqueueing while already play
 
 When a track finishes naturally, the voice gateway notifies the application layer and the next queued item starts automatically.
 
-If the queue is empty and `/autoplay mode:related` is enabled, the application searches metadata providers for a related candidate using deterministic scoring. The scorer uses normalized title similarity, token overlap, artist/channel overlap, provider match, and a small mood bonus. The candidate still has to go through the playable-source resolver before playback. If resolving or playback fails, the candidate remains recoverable at the front of the queue.
+If the queue is empty and `/autoplay mode:related` is enabled, the application searches metadata providers for a related candidate using deterministic scoring. The scorer uses normalized title similarity, token overlap, artist/channel overlap, provider match, and a small mood bonus. The candidate still has to go through the playable-source resolver before playback. Autoplay-generated suggestions are queued only after a playable source is resolved and playback starts.
 
 If autoplay is off or no strong related candidate exists, playback becomes idle and the bot may remain connected. It does not auto-leave by default.
+
+Related autoplay is bounded for each queue-end transition. It distinguishes these outcomes:
+
+- no related candidate
+- provider unavailable
+- provider on cooldown
+- metadata-only suggestion
+- playback failure after resolution
+- playable continuation
+
+If all providers are unavailable or on cooldown, autoplay stops cleanly for that transition. If a related suggestion cannot be resolved to an honest playable source, it is treated as metadata-only and is not queued as fake audio. The bot stays present and the queue remains clean.
 
 Playback failure rollback is deterministic. If an item is promoted to current and source resolution or voice playback fails, that item is restored to the front of the upcoming queue.
 

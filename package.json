@@ -1,7 +1,8 @@
 {
   "name": "orchestra-voice",
   "version": "1.0.0",
-  "main": "index.js",
+  "description": "Discord music bot with metadata search, queueing, and explicit playback resolving.",
+  "main": "dist/app/bootstrap/index.js",
   "scripts": {
     "dev": "tsx src/app/bootstrap/index.ts",
     "typecheck": "tsc --noEmit",
@@ -13,7 +14,9 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
     "@snazzah/davey": "^0.1.11",

@@ -1,5 +1,9 @@
 import { Track } from "../../../domain/entities/Track";
 import { MusicCatalogPort } from "../../../application/ports/outbound/MusicCatalogPort";
+import {
+  createMissingCredentialsFailure,
+  createProviderHttpFailure,
+} from "../../../application/services/ProviderFailureClassifier";
 
 interface SpotifyTokenResponse {
   access_token: string;
@@ -54,8 +58,10 @@ export class SpotifyCatalogAdapter implements MusicCatalogPort {
     }
 
     if (!this.clientId || !this.clientSecret) {
-      throw new Error(
-        "SPOTIFY_CLIENT_ID or SPOTIFY_CLIENT_SECRET is missing in .env",
+      throw createMissingCredentialsFailure(
+        "spotify",
+        "token request",
+        ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET"],
       );
     }
 
@@ -76,8 +82,12 @@ export class SpotifyCatalogAdapter implements MusicCatalogPort {
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(
-        `Spotify token request failed. HTTP ${response.status}. ${errorText}`,
+      throw createProviderHttpFailure(
+        "spotify",
+        "token request",
+        response.status,
+        errorText,
+        response.headers.get("retry-after"),
       );
     }
 
@@ -125,8 +135,12 @@ export class SpotifyCatalogAdapter implements MusicCatalogPort {
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(
-        `Spotify search failed. HTTP ${response.status}. ${errorText}`,
+      throw createProviderHttpFailure(
+        "spotify",
+        "search",
+        response.status,
+        errorText,
+        response.headers.get("retry-after"),
       );
     }
 
@@ -154,8 +168,12 @@ export class SpotifyCatalogAdapter implements MusicCatalogPort {
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(
-        `Spotify track lookup failed. HTTP ${response.status}. ${errorText}`,
+      throw createProviderHttpFailure(
+        "spotify",
+        "track lookup",
+        response.status,
+        errorText,
+        response.headers.get("retry-after"),
       );
     }
 

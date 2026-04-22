@@ -1,5 +1,9 @@
 import { Track } from "../../../domain/entities/Track";
 import { MusicCatalogPort } from "../../../application/ports/outbound/MusicCatalogPort";
+import {
+  createMissingCredentialsFailure,
+  createProviderHttpFailure,
+} from "../../../application/services/ProviderFailureClassifier";
 
 interface YouTubeSearchItem {
   id?: {
@@ -25,7 +29,9 @@ export class YouTubeCatalogAdapter implements MusicCatalogPort {
 
   async search(query: string): Promise<Track[]> {
     if (!this.apiKey) {
-      throw new Error("YOUTUBE_API_KEY is missing in .env");
+      throw createMissingCredentialsFailure("youtube", "search", [
+        "YOUTUBE_API_KEY",
+      ]);
     }
 
     const url = new URL("https://www.googleapis.com/youtube/v3/search");
@@ -39,8 +45,12 @@ export class YouTubeCatalogAdapter implements MusicCatalogPort {
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(
-        `YouTube search failed. HTTP ${response.status}. ${errorText}`,
+      throw createProviderHttpFailure(
+        "youtube",
+        "search",
+        response.status,
+        errorText,
+        response.headers.get("retry-after"),
       );
     }
 

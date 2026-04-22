@@ -26,6 +26,7 @@ import type { ResumePlayback } from "../../application/use-cases/ResumePlayback"
 import type { SetAutoplayMode } from "../../application/use-cases/SetAutoplayMode";
 import type { SetPlaybackMood } from "../../application/use-cases/SetPlaybackMood";
 import type { SearchProvider } from "../../application/ports/outbound/SearchSessionRepositoryPort";
+import type { ProviderSearchStatus } from "../../application/ports/outbound/MusicCatalogPort";
 import type {
   AutoplayMode,
   GuildPlaybackSettingsState,
@@ -485,7 +486,9 @@ export class DiscordInteractionHandler {
   ): Promise<void> {
     const query = interaction.options.getString("query", true);
     const provider = this.getSearchProvider(interaction);
-    const tracks = await this.dependencies.searchTracks[provider].execute(query);
+    const searchResult =
+      await this.dependencies.searchTracks[provider].executeDetailed(query);
+    const { tracks, providerStatuses } = searchResult;
 
     await this.dependencies.saveSearchResults.execute({
       guildId: interaction.guildId!,
@@ -495,18 +498,30 @@ export class DiscordInteractionHandler {
     });
 
     if (tracks.length === 0) {
+      const providerNote = this.formatProviderStatusNote(providerStatuses);
       await interaction.editReply({
         embeds: [
           this.baseEmbed("No results").setDescription(
-            `No ${provider} metadata results found for **${query}**.`,
+            providerNote
+              ? `${providerNote}\n\nNo ${provider} metadata results were saved for **${query}**.`
+              : `No ${provider} metadata results found for **${query}**.`,
           ),
         ],
       });
       return;
     }
 
+    const embed = this.formatSearchEmbed(query, provider, tracks);
+    const providerNote = this.formatProviderStatusNote(providerStatuses);
+    if (providerNote) {
+      embed.addFields({
+        name: "Provider note",
+        value: providerNote,
+      });
+    }
+
     await interaction.editReply({
-      embeds: [this.formatSearchEmbed(query, provider, tracks)],
+      embeds: [embed],
     });
   }
 
@@ -731,6 +746,55 @@ export class DiscordInteractionHandler {
           inline: true,
         },
       );
+  }
+
+  private formatProviderStatusNote(
+    providerStatuses: ProviderSearchStatus[],
+  ): string | undefined {
+    const failed = providerStatuses.filter(
+      (status) => status.status === "failed",
+    );
+    const skipped = providerStatuses.filter(
+      (status) => status.status === "skipped",
+    );
+    const notes: string[] = [];
+
+    if (failed.length > 0) {
+      notes.push(
+        `${this.formatProviderNames(
+          failed.map((status) => status.provider),
+        )} temporarily unavailable (${failed
+          .map((status) => this.formatFailureReason(status.failure.reason))
+          .join(", ")}).`,
+      );
+    }
+
+    if (skipped.length > 0) {
+      notes.push(
+        `${this.formatProviderNames(
+          skipped.map((status) => status.provider),
+        )} on cooldown after ${skipped
+          .map((status) => this.formatFailureReason(status.failureReason))
+          .join(", ")}.`,
+      );
+    }
+
+    return notes.length > 0 ? notes.join("\n") : undefined;
+  }
+
+  private formatProviderNames(providers: string[]): string {
+    const names = [...new Set(providers)].map(
+      (provider) => provider[0].toUpperCase() + provider.slice(1),
+    );
+
+    if (names.length === 0) return "Provider";
+    if (names.length === 1) return names[0];
+
+    return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  }
+
+  private formatFailureReason(reason: string): string {
+    return reason.replace(/-/g, " ");
   }
 
   private describePlaybackPath(track: Track): string {

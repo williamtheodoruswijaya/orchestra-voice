@@ -1,6 +1,8 @@
 FROM node:22-bookworm
 
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg yt-dlp ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
