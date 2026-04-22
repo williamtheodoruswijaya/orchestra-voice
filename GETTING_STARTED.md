@@ -6,6 +6,8 @@ The most important product rule is that metadata and playback are separate conce
 
 ## Architecture
 
+![clean architecture](https://miro.medium.com/v2/resize:fit:720/format:webp/0*EJBuZa9qm-ubdB-l.jpg)
+
 The codebase follows a Clean Architecture direction:
 
 - `src/domain`
