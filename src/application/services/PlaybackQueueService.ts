@@ -106,7 +106,7 @@ export class PlaybackQueueService {
       `Queue currently has ${queue.upcoming.length} upcoming items and status "${queue.status}".`,
     );
 
-    const isPlaying = queue.current !== null;
+    const isPlaying = queue.status === "playing";
 
     if (isPlaying) {
       queue.enqueue(item);
