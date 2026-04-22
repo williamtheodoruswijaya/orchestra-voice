@@ -42,7 +42,7 @@ export class CompositeMusicCatalogAdapter implements MusicCatalogPort {
   ): Promise<MusicCatalogSearchResult> {
     try {
       if (provider.searchDetailed) {
-        return provider.searchDetailed(query);
+        return await provider.searchDetailed(query);
       }
 
       const tracks = await provider.search(query);
