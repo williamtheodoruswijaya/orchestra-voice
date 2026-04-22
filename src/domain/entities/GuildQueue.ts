@@ -52,6 +52,11 @@ export class GuildQueue {
     return this.upcomingItems.length;
   }
 
+  playNow(item: QueueItem): void {
+    this.currentItem = item;
+    this.playbackStatus = "playing";
+  }
+
   startNext(): QueueItem | undefined {
     const nextItem = this.upcomingItems.shift();
 
@@ -73,6 +78,19 @@ export class GuildQueue {
     this.currentItem = undefined;
     this.playbackStatus = "idle";
     return this.startNext();
+  }
+
+  rollbackCurrentToFront(): QueueItem | undefined {
+    if (!this.currentItem) {
+      return undefined;
+    }
+
+    const failedItem = this.currentItem;
+    this.currentItem = undefined;
+    this.playbackStatus = "idle";
+    this.upcomingItems.unshift(failedItem);
+
+    return failedItem;
   }
 
   removeUpcoming(position: number): QueueItem {

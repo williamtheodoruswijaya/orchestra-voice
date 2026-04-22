@@ -4,9 +4,9 @@ This project is a Discord music bot built with Node.js, TypeScript, Discord.js, 
 
 The most important product rule is that metadata and playback are separate concepts. YouTube and Spotify providers return track metadata. A track becomes playable only when a separate playable-source resolver resolves it into audio that the voice gateway can play.
 
-## Architecture
+The voice presence rule is intentional: this bot may stay online and connected to voice channels continuously. Idle auto-leave is not a default behavior in this repository. If it is ever added, it must be explicit, optional, per-guild configurable, and documented.
 
-![clean architecture](https://miro.medium.com/v2/resize:fit:720/format:webp/0*EJBuZa9qm-ubdB-l.jpg)
+## Architecture
 
 The codebase follows a Clean Architecture direction:
 
@@ -43,6 +43,9 @@ Infrastructure can implement application ports. Domain should remain pure.
 
 - Playable source
   A resolved audio input such as a validated direct audio URL or a stream returned by an explicit resolver.
+
+- Guild playback settings
+  Per-guild comfort settings such as related-track autoplay mode and mood preset. Defaults are conservative: autoplay is off and mood is balanced.
 
 ## Provider Limits
 
@@ -176,7 +179,13 @@ If `yt-dlp` is not on `PATH`, set `YT_DLP_PATH` to the executable path.
   Pauses or resumes current playback.
 
 - `/play query:<text-or-url>`
-  Explicitly starts playback now through the playable-source resolver. This may interrupt the current item.
+  Explicitly starts playback now through the playable-source resolver. If something is already playing, `/play` intentionally interrupts the current item and makes the requested item current. Existing upcoming queue items are preserved.
+
+- `/autoplay mode:<status|off|related>`
+  Shows or changes related-track continuation for this guild. The default is `off`.
+
+- `/mood preset:<status|balanced|focus|chill|upbeat>`
+  Shows or changes the per-guild mood preset used as a small ranking signal for related-track suggestions.
 
 - `/stop`
   Stops current playback state but keeps upcoming queue items.
@@ -191,6 +200,12 @@ Queue state is scoped per guild.
 Enqueueing while idle starts playback immediately. Enqueueing while already playing does not interrupt the current item.
 
 When a track finishes naturally, the voice gateway notifies the application layer and the next queued item starts automatically.
+
+If the queue is empty and `/autoplay mode:related` is enabled, the application searches metadata providers for a related candidate using deterministic scoring. The scorer uses normalized title similarity, token overlap, artist/channel overlap, provider match, and a small mood bonus. The candidate still has to go through the playable-source resolver before playback. If resolving or playback fails, the candidate remains recoverable at the front of the queue.
+
+If autoplay is off or no strong related candidate exists, playback becomes idle and the bot may remain connected. It does not auto-leave by default.
+
+Playback failure rollback is deterministic. If an item is promoted to current and source resolution or voice playback fails, that item is restored to the front of the upcoming queue.
 
 `/clearqueue` only clears upcoming items. It does not stop the current track.
 
@@ -218,6 +233,8 @@ npm run build
 
 The tests focus on domain and application behavior, including queue order, enqueue behavior, autoplay advancement, skip, clear, remove, and search-session selection.
 
+Additional coverage protects rollback on resolver and voice playback failure, `/play` interrupt semantics, related-track scoring, guild autoplay settings, and mood isolation.
+
 ## CI
 
 GitHub Actions runs:
@@ -243,6 +260,10 @@ All checks must pass before a change is considered ready.
 
 - Metadata providers do not pretend to return playable audio.
 - Queue commands do not silently interrupt current playback.
+- `/play` remains the explicit immediate interrupt command.
+- `/enqueue` appends and does not interrupt current playback.
+- Related-track autoplay remains opt-in per guild.
+- Idle auto-leave is not introduced as a default behavior.
 - Discord handlers call application use cases instead of owning business logic.
 - New commands are registered and documented.
 - Tests cover meaningful behavior rather than placeholders.

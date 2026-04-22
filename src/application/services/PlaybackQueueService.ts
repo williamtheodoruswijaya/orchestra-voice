@@ -5,6 +5,9 @@ import {
   QueueState,
 } from "../../domain/entities/GuildQueue";
 import type { Track } from "../../domain/entities/Track";
+import { TrackSimilarityScorer } from "../../domain/services/TrackSimilarityScorer";
+import type { GuildPlaybackSettingsRepositoryPort } from "../ports/outbound/GuildPlaybackSettingsRepositoryPort";
+import type { MusicCatalogPort } from "../ports/outbound/MusicCatalogPort";
 import type { QueueRepositoryPort } from "../ports/outbound/QueueRepositoryPort";
 import type { ResolvedAudioSource, StreamResolverPort } from "../ports/outbound/StreamResolverPort";
 import type { VoiceGatewayPort } from "../ports/outbound/VoiceGatewayPort";
@@ -41,6 +44,8 @@ export interface PlayNowResult extends QueueMutationResult {
 export interface AdvancePlaybackResult extends QueueMutationResult {
   nextItem?: QueueItem;
   resolvedAudioSource?: ResolvedAudioSource;
+  autoplayStarted: boolean;
+  relatedCandidate?: Track;
 }
 
 export interface RemoveQueueItemResult extends QueueMutationResult {
@@ -54,14 +59,32 @@ export interface ClearQueueResult extends QueueMutationResult {
 type IdGenerator = () => string;
 type Clock = () => number;
 
+interface PlaybackQueueServiceOptions {
+  relatedCatalog?: MusicCatalogPort;
+  settingsRepository?: GuildPlaybackSettingsRepositoryPort;
+  similarityScorer?: TrackSimilarityScorer;
+  relatedScoreThreshold?: number;
+}
+
 export class PlaybackQueueService {
+  private readonly relatedCatalog?: MusicCatalogPort;
+  private readonly settingsRepository?: GuildPlaybackSettingsRepositoryPort;
+  private readonly similarityScorer: TrackSimilarityScorer;
+  private readonly relatedScoreThreshold: number;
+
   constructor(
     private readonly queueRepository: QueueRepositoryPort,
     private readonly streamResolver: StreamResolverPort,
     private readonly voiceGateway: VoiceGatewayPort,
     private readonly idGenerator: IdGenerator = randomUUID,
     private readonly clock: Clock = Date.now,
-  ) {}
+    options: PlaybackQueueServiceOptions = {},
+  ) {
+    this.relatedCatalog = options.relatedCatalog;
+    this.settingsRepository = options.settingsRepository;
+    this.similarityScorer = options.similarityScorer ?? new TrackSimilarityScorer();
+    this.relatedScoreThreshold = options.relatedScoreThreshold ?? 0.18;
+  }
 
   async playNow(input: PlayNowInput): Promise<PlayNowResult> {
     const resolvedAudioSource = await this.streamResolver.resolve(input.source);
@@ -72,15 +95,20 @@ export class PlaybackQueueService {
       input.requestedBy,
     );
 
-    queue.stop();
-    queue.enqueue(item);
-    queue.startNext();
-
-    await this.voiceGateway.play({
-      guildId: input.guildId,
-      ...resolvedAudioSource,
-    });
+    queue.playNow(item);
     await this.queueRepository.save(queue);
+
+    try {
+      await this.voiceGateway.play({
+        guildId: input.guildId,
+        ...resolvedAudioSource,
+      });
+      await this.queueRepository.save(queue);
+    } catch (error) {
+      queue.rollbackCurrentToFront();
+      await this.queueRepository.save(queue);
+      throw error;
+    }
 
     return {
       item,
@@ -123,7 +151,7 @@ export class PlaybackQueueService {
         resolvedAudioSource,
       };
     } catch (error) {
-      queue.stop();
+      queue.rollbackCurrentToFront();
       await this.queueRepository.save(queue);
       throw error;
     }
@@ -135,16 +163,45 @@ export class PlaybackQueueService {
     if (!queue.current) {
       return {
         queue: queue.toState(),
+        autoplayStarted: false,
       };
     }
 
+    const finishedItem = queue.current;
     const nextItem = queue.finishCurrent();
 
     if (!nextItem) {
+      const relatedCandidate = await this.findRelatedTrack(guildId, finishedItem.track);
+
+      if (!relatedCandidate) {
+        await this.queueRepository.save(queue);
+        return {
+          queue: queue.toState(),
+          autoplayStarted: false,
+        };
+      }
+
+      const relatedItem = this.createQueueItem(guildId, relatedCandidate);
+      queue.enqueue(relatedItem);
+      queue.startNext();
       await this.queueRepository.save(queue);
-      return {
-        queue: queue.toState(),
-      };
+
+      try {
+        const resolvedAudioSource = await this.playItem(guildId, relatedItem);
+        await this.queueRepository.save(queue);
+
+        return {
+          nextItem: relatedItem,
+          resolvedAudioSource,
+          queue: queue.toState(),
+          autoplayStarted: true,
+          relatedCandidate,
+        };
+      } catch (error) {
+        queue.rollbackCurrentToFront();
+        await this.queueRepository.save(queue);
+        throw error;
+      }
     }
 
     await this.queueRepository.save(queue);
@@ -157,9 +214,10 @@ export class PlaybackQueueService {
         nextItem,
         resolvedAudioSource,
         queue: queue.toState(),
+        autoplayStarted: false,
       };
     } catch (error) {
-      queue.stop();
+      queue.rollbackCurrentToFront();
       await this.queueRepository.save(queue);
       throw error;
     }
@@ -170,10 +228,11 @@ export class PlaybackQueueService {
     const nextItem = queue.skipCurrent();
 
     if (!nextItem) {
-      await this.voiceGateway.stop(guildId);
       await this.queueRepository.save(queue);
+      await this.voiceGateway.stop(guildId);
       return {
         queue: queue.toState(),
+        autoplayStarted: false,
       };
     }
 
@@ -187,9 +246,10 @@ export class PlaybackQueueService {
         nextItem,
         resolvedAudioSource,
         queue: queue.toState(),
+        autoplayStarted: false,
       };
     } catch (error) {
-      queue.stop();
+      queue.rollbackCurrentToFront();
       await this.queueRepository.save(queue);
       throw error;
     }
@@ -259,8 +319,8 @@ export class PlaybackQueueService {
   async stop(guildId: string): Promise<QueueState> {
     const queue = await this.queueRepository.getByGuildId(guildId);
     queue.stop();
-    await this.voiceGateway.stop(guildId);
     await this.queueRepository.save(queue);
+    await this.voiceGateway.stop(guildId);
     return queue.toState();
   }
 
@@ -274,6 +334,37 @@ export class PlaybackQueueService {
       ...resolvedAudioSource,
     });
     return resolvedAudioSource;
+  }
+
+  private async findRelatedTrack(
+    guildId: string,
+    reference: Track,
+  ): Promise<Track | undefined> {
+    if (!this.relatedCatalog || !this.settingsRepository) {
+      return undefined;
+    }
+
+    const settings = await this.settingsRepository.getByGuildId(guildId);
+
+    if (settings.autoplayMode !== "related") {
+      return undefined;
+    }
+
+    const query = reference.artist
+      ? `${reference.artist} ${reference.title}`
+      : reference.title;
+    const candidates = await this.relatedCatalog.search(query);
+    const [bestCandidate] = this.similarityScorer.rank(
+      reference,
+      candidates,
+      settings.mood,
+    );
+
+    if (!bestCandidate || bestCandidate.score < this.relatedScoreThreshold) {
+      return undefined;
+    }
+
+    return bestCandidate.track;
   }
 
   private createQueueItem(

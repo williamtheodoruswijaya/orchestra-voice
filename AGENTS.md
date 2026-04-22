@@ -12,6 +12,31 @@ Current product goals:
 - Clear distinction between metadata providers and playable audio sources
 - Reliable tests and CI
 
+## Voice presence rule
+
+This bot is intended to remain online 24/7 and may remain connected to a voice channel continuously.
+
+Do not introduce idle auto-leave as a default behavior.
+
+If an idle-leave feature is ever added:
+
+- it must be optional
+- it must be explicit
+- it must be configurable per guild
+- it must be documented clearly in contributor and user-facing docs
+
+When improving voice comfort or UX, prefer:
+
+- low-noise responses
+- better queue-ended behavior
+- mood or ambience features
+- autoplay suggestions
+- same-channel politeness
+- clear playback state messaging
+
+Do not assume “leave on idle” is a UX improvement in this repository.
+Persistent voice presence is an intentional product behavior.
+
 Important architectural truth:
 
 - YouTube and Spotify integrations in this repo should be treated as metadata/search providers unless the code explicitly uses a separate playable audio source/resolver.

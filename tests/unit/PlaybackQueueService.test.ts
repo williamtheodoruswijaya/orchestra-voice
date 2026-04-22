@@ -1,17 +1,24 @@
 import { describe, expect, it } from "vitest";
-import type { DiscordGatewayAdapterCreator } from "@discordjs/voice";
 import { PlaybackQueueService } from "../../src/application/services/PlaybackQueueService";
 import type { ResolvedAudioSource, StreamResolverPort } from "../../src/application/ports/outbound/StreamResolverPort";
+import type { MusicCatalogPort } from "../../src/application/ports/outbound/MusicCatalogPort";
 import type {
   JoinVoiceRequest,
   PlayAudioRequest,
   VoiceGatewayPort,
 } from "../../src/application/ports/outbound/VoiceGatewayPort";
+import { InMemoryGuildPlaybackSettingsRepository } from "../../src/infrastructure/persistence/memory/InMemoryGuildPlaybackSettingsRepository";
 import { InMemoryGuildQueueRepository } from "../../src/infrastructure/persistence/memory/InMemoryGuildQueueRepository";
 import type { Track } from "../../src/domain/entities/Track";
 
 class FakeStreamResolver implements StreamResolverPort {
+  readonly failedTrackIds = new Set<string>();
+
   async resolve(source: string | Track): Promise<ResolvedAudioSource> {
+    if (typeof source !== "string" && this.failedTrackIds.has(source.id)) {
+      throw new Error(`Cannot resolve ${source.title}`);
+    }
+
     const title = typeof source === "string" ? source : source.title;
 
     return {
@@ -22,17 +29,31 @@ class FakeStreamResolver implements StreamResolverPort {
   }
 }
 
+class FakeMusicCatalog implements MusicCatalogPort {
+  constructor(private readonly tracks: Track[] = []) {}
+
+  async search(_query: string): Promise<Track[]> {
+    return this.tracks;
+  }
+}
+
 class FakeVoiceGateway implements VoiceGatewayPort {
   readonly playCalls: PlayAudioRequest[] = [];
   readonly stopCalls: string[] = [];
   readonly pauseCalls: string[] = [];
   readonly resumeCalls: string[] = [];
+  failNextPlay = false;
   private readonly listeners: Array<(guildId: string) => void | Promise<void>> =
     [];
 
   async join(_request: JoinVoiceRequest): Promise<void> {}
 
   async play(request: PlayAudioRequest): Promise<void> {
+    if (this.failNextPlay) {
+      this.failNextPlay = false;
+      throw new Error(`Cannot play ${request.title}`);
+    }
+
     this.playCalls.push(request);
   }
 
@@ -77,20 +98,28 @@ function createTrack(id: string): Track {
 function createService(): {
   service: PlaybackQueueService;
   voiceGateway: FakeVoiceGateway;
+  streamResolver: FakeStreamResolver;
+  settingsRepository: InMemoryGuildPlaybackSettingsRepository;
 } {
   const voiceGateway = new FakeVoiceGateway();
+  const streamResolver = new FakeStreamResolver();
+  const settingsRepository = new InMemoryGuildPlaybackSettingsRepository();
   const service = new PlaybackQueueService(
     new InMemoryGuildQueueRepository(),
-    new FakeStreamResolver(),
+    streamResolver,
     voiceGateway,
     (() => {
       let counter = 0;
       return () => `queue-item-${++counter}`;
     })(),
     () => 1_700_000_000_000,
+    {
+      relatedCatalog: new FakeMusicCatalog([createTrack("related")]),
+      settingsRepository,
+    },
   );
 
-  return { service, voiceGateway };
+  return { service, voiceGateway, streamResolver, settingsRepository };
 }
 
 describe("PlaybackQueueService", () => {
@@ -126,6 +155,80 @@ describe("PlaybackQueueService", () => {
       "Track b",
     ]);
     expect(voiceGateway.playCalls).toHaveLength(1);
+  });
+
+  it("play now intentionally interrupts current playback while preserving upcoming items", async () => {
+    const { service, voiceGateway } = createService();
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("b") });
+
+    const result = await service.playNow({
+      guildId: "guild-a",
+      source: createTrack("now"),
+    });
+
+    expect(result.queue.current?.track.title).toBe("Track now");
+    expect(result.queue.upcoming.map((item) => item.track.title)).toEqual([
+      "Track b",
+    ]);
+    expect(voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      "Track a",
+      "Track now",
+    ]);
+  });
+
+  it("keeps a failed play-now item recoverable at the front of the queue", async () => {
+    const { service, voiceGateway } = createService();
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("b") });
+    voiceGateway.failNextPlay = true;
+
+    await expect(
+      service.playNow({
+        guildId: "guild-a",
+        source: createTrack("now"),
+      }),
+    ).rejects.toThrow("Cannot play Track now");
+
+    const queue = await service.getQueue("guild-a");
+    expect(queue.current).toBeUndefined();
+    expect(queue.upcoming.map((item) => item.track.title)).toEqual([
+      "Track now",
+      "Track b",
+    ]);
+  });
+
+  it("rolls back an idle enqueue when playback fails", async () => {
+    const { service, voiceGateway } = createService();
+    voiceGateway.failNextPlay = true;
+
+    await expect(
+      service.enqueue({ guildId: "guild-a", track: createTrack("a") }),
+    ).rejects.toThrow("Cannot play Track a");
+
+    const queue = await service.getQueue("guild-a");
+    expect(queue.current).toBeUndefined();
+    expect(queue.upcoming.map((item) => item.track.title)).toEqual([
+      "Track a",
+    ]);
+  });
+
+  it("rolls back an idle enqueue when source resolution fails", async () => {
+    const { service, streamResolver } = createService();
+    const track = createTrack("a");
+    streamResolver.failedTrackIds.add(track.id);
+
+    await expect(
+      service.enqueue({ guildId: "guild-a", track }),
+    ).rejects.toThrow("Cannot resolve Track a");
+
+    const queue = await service.getQueue("guild-a");
+    expect(queue.current).toBeUndefined();
+    expect(queue.upcoming.map((item) => item.track.title)).toEqual([
+      "Track a",
+    ]);
   });
 
   it("preserves queue order while advancing through tracks", async () => {
@@ -178,6 +281,59 @@ describe("PlaybackQueueService", () => {
     expect(result.queue.current?.track.title).toBe("Track b");
     expect(voiceGateway.playCalls.map((call) => call.title)).toEqual([
       "Track a",
+      "Track b",
+    ]);
+  });
+
+  it("rolls back the next item when skip playback fails", async () => {
+    const { service, voiceGateway } = createService();
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("b") });
+    voiceGateway.failNextPlay = true;
+
+    await expect(service.skip("guild-a")).rejects.toThrow("Cannot play Track b");
+
+    const queue = await service.getQueue("guild-a");
+    expect(queue.current).toBeUndefined();
+    expect(queue.upcoming.map((item) => item.track.title)).toEqual([
+      "Track b",
+    ]);
+  });
+
+  it("rolls back the next item when skip source resolution fails", async () => {
+    const { service, streamResolver } = createService();
+    const nextTrack = createTrack("b");
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+    await service.enqueue({ guildId: "guild-a", track: nextTrack });
+    streamResolver.failedTrackIds.add(nextTrack.id);
+
+    await expect(service.skip("guild-a")).rejects.toThrow(
+      "Cannot resolve Track b",
+    );
+
+    const queue = await service.getQueue("guild-a");
+    expect(queue.current).toBeUndefined();
+    expect(queue.upcoming.map((item) => item.track.title)).toEqual([
+      "Track b",
+    ]);
+  });
+
+  it("rolls back the next item when natural advance playback fails", async () => {
+    const { service, voiceGateway } = createService();
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("b") });
+    voiceGateway.failNextPlay = true;
+
+    await expect(service.advanceAfterCurrent("guild-a")).rejects.toThrow(
+      "Cannot play Track b",
+    );
+
+    const queue = await service.getQueue("guild-a");
+    expect(queue.current).toBeUndefined();
+    expect(queue.upcoming.map((item) => item.track.title)).toEqual([
       "Track b",
     ]);
   });
@@ -253,9 +409,36 @@ describe("PlaybackQueueService", () => {
     expect(guildAQueue.current?.track.title).toBe("Track a");
     expect(guildBQueue.current?.track.title).toBe("Track b");
   });
-});
 
-const _adapterCreator: DiscordGatewayAdapterCreator = () => ({
-  destroy: () => undefined,
-  sendPayload: () => false,
+  it("does not start related autoplay when autoplay is disabled", async () => {
+    const { service, voiceGateway } = createService();
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+
+    const result = await service.advanceAfterCurrent("guild-a");
+
+    expect(result.autoplayStarted).toBe(false);
+    expect(result.nextItem).toBeUndefined();
+    expect(voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      "Track a",
+    ]);
+  });
+
+  it("starts a related track when related autoplay is enabled and queue is empty", async () => {
+    const { service, voiceGateway, settingsRepository } = createService();
+    const settings = await settingsRepository.getByGuildId("guild-a");
+    settings.enableRelatedAutoplay();
+    await settingsRepository.save(settings);
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+
+    const result = await service.advanceAfterCurrent("guild-a");
+
+    expect(result.autoplayStarted).toBe(true);
+    expect(result.nextItem?.track.title).toBe("Track related");
+    expect(voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      "Track a",
+      "Track related",
+    ]);
+  });
 });

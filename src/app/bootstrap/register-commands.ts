@@ -138,6 +138,40 @@ async function main(): Promise<void> {
       .setName("resume")
       .setDescription("Resume paused playback")
       .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("autoplay")
+      .setDescription("Configure related-track continuation for this server")
+      .addStringOption((option) =>
+        option
+          .setName("mode")
+          .setDescription("Autoplay mode")
+          .setRequired(true)
+          .addChoices(
+            { name: "Status", value: "status" },
+            { name: "Off", value: "off" },
+            { name: "Related", value: "related" },
+          ),
+      )
+      .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("mood")
+      .setDescription("Set the server mood for related-track suggestions")
+      .addStringOption((option) =>
+        option
+          .setName("preset")
+          .setDescription("Mood preset")
+          .setRequired(true)
+          .addChoices(
+            { name: "Status", value: "status" },
+            { name: "Balanced", value: "balanced" },
+            { name: "Focus", value: "focus" },
+            { name: "Chill", value: "chill" },
+            { name: "Upbeat", value: "upbeat" },
+          ),
+      )
+      .toJSON(),
   ];
 
   const rest = new REST({ version: "10" }).setToken(token);

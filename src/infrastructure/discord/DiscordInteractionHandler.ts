@@ -16,13 +16,21 @@ import type { PlayNowTrack } from "../../application/use-cases/PlayNowTrack";
 import type { EnqueueTrack } from "../../application/use-cases/EnqueueTrack";
 import type { GetQueue } from "../../application/use-cases/GetQueue";
 import type { GetNowPlaying } from "../../application/use-cases/GetNowPlaying";
+import type { GetPlaybackSettings } from "../../application/use-cases/GetPlaybackSettings";
 import type { SkipTrack } from "../../application/use-cases/SkipTrack";
 import type { ClearQueue } from "../../application/use-cases/ClearQueue";
 import type { RemoveQueueItem } from "../../application/use-cases/RemoveQueueItem";
 import type { StopPlayback } from "../../application/use-cases/StopPlayback";
 import type { PausePlayback } from "../../application/use-cases/PausePlayback";
 import type { ResumePlayback } from "../../application/use-cases/ResumePlayback";
+import type { SetAutoplayMode } from "../../application/use-cases/SetAutoplayMode";
+import type { SetPlaybackMood } from "../../application/use-cases/SetPlaybackMood";
 import type { SearchProvider } from "../../application/ports/outbound/SearchSessionRepositoryPort";
+import type {
+  AutoplayMode,
+  GuildPlaybackSettingsState,
+  PlaybackMood,
+} from "../../domain/entities/GuildPlaybackSettings";
 import type { QueueItem, QueueState } from "../../domain/entities/GuildQueue";
 import type { Track } from "../../domain/entities/Track";
 import { formatDurationMs } from "../../shared/utils/time";
@@ -46,6 +54,9 @@ interface DiscordInteractionHandlerDependencies {
   stopPlayback: StopPlayback;
   pausePlayback: PausePlayback;
   resumePlayback: ResumePlayback;
+  getPlaybackSettings: GetPlaybackSettings;
+  setAutoplayMode: SetAutoplayMode;
+  setPlaybackMood: SetPlaybackMood;
 }
 
 export class DiscordInteractionHandler {
@@ -104,6 +115,12 @@ export class DiscordInteractionHandler {
           return;
         case "resume":
           await this.handleResume(interaction);
+          return;
+        case "autoplay":
+          await this.handleAutoplay(interaction);
+          return;
+        case "mood":
+          await this.handleMood(interaction);
           return;
         case "stop":
           await this.handleStop(interaction);
@@ -373,6 +390,56 @@ export class DiscordInteractionHandler {
     });
   }
 
+  private async handleAutoplay(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    const mode = interaction.options.getString("mode", true) as
+      | AutoplayMode
+      | "status";
+    const settings =
+      mode === "status"
+        ? await this.dependencies.getPlaybackSettings.execute(
+            interaction.guildId!,
+          )
+        : await this.dependencies.setAutoplayMode.execute({
+            guildId: interaction.guildId!,
+            mode,
+          });
+
+    await interaction.editReply({
+      embeds: [
+        this.formatSettingsEmbed(settings).setTitle(
+          mode === "status" ? "Autoplay status" : "Autoplay updated",
+        ),
+      ],
+    });
+  }
+
+  private async handleMood(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    const mood = interaction.options.getString("preset", true) as
+      | PlaybackMood
+      | "status";
+    const settings =
+      mood === "status"
+        ? await this.dependencies.getPlaybackSettings.execute(
+            interaction.guildId!,
+          )
+        : await this.dependencies.setPlaybackMood.execute({
+            guildId: interaction.guildId!,
+            mood,
+          });
+
+    await interaction.editReply({
+      embeds: [
+        this.formatSettingsEmbed(settings).setTitle(
+          mood === "status" ? "Mood status" : "Mood updated",
+        ),
+      ],
+    });
+  }
+
   private async handleStop(
     interaction: ChatInputCommandInteraction,
   ): Promise<void> {
@@ -577,7 +644,7 @@ export class DiscordInteractionHandler {
 
     if (!queue.current && queue.upcoming.length === 0) {
       return embed.setDescription(
-        "The queue is empty. Use `/search`, `/pick`, and `/enqueue` to add a selected metadata result.",
+        "The queue is empty. Use `/search`, `/pick`, and `/enqueue` to add a selected metadata result. I will stay connected unless you use `/leave`.",
       );
     }
 
@@ -633,6 +700,28 @@ export class DiscordInteractionHandler {
 
   private formatProvider(track: Track): string {
     return track.provider[0].toUpperCase() + track.provider.slice(1);
+  }
+
+  private formatSettingsEmbed(settings: GuildPlaybackSettingsState): EmbedBuilder {
+    return this.baseEmbed("Playback settings")
+      .setDescription(
+        "These settings are scoped to this server. No idle auto-leave is enabled by default.",
+      )
+      .addFields(
+        {
+          name: "Autoplay",
+          value:
+            settings.autoplayMode === "related"
+              ? "Related-track continuation is on."
+              : "Related-track continuation is off.",
+          inline: false,
+        },
+        {
+          name: "Mood",
+          value: settings.mood,
+          inline: true,
+        },
+      );
   }
 
   private describePlaybackPath(track: Track): string {

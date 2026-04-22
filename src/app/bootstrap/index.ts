@@ -3,6 +3,7 @@ import { Events } from "discord.js";
 import { ClearQueue } from "../../application/use-cases/ClearQueue";
 import { EnqueueTrack } from "../../application/use-cases/EnqueueTrack";
 import { GetNowPlaying } from "../../application/use-cases/GetNowPlaying";
+import { GetPlaybackSettings } from "../../application/use-cases/GetPlaybackSettings";
 import { GetQueue } from "../../application/use-cases/GetQueue";
 import { GetSelectedTrack } from "../../application/use-cases/GetSelectedTrack";
 import { JoinVoiceChannel } from "../../application/use-cases/JoinVoiceChannel";
@@ -15,12 +16,16 @@ import { RemoveQueueItem } from "../../application/use-cases/RemoveQueueItem";
 import { ResumePlayback } from "../../application/use-cases/ResumePlayback";
 import { SaveSearchResults } from "../../application/use-cases/SaveSearchResults";
 import { SearchTracks } from "../../application/use-cases/SearchTracks";
+import { SetAutoplayMode } from "../../application/use-cases/SetAutoplayMode";
+import { SetPlaybackMood } from "../../application/use-cases/SetPlaybackMood";
 import { SkipTrack } from "../../application/use-cases/SkipTrack";
 import { StopPlayback } from "../../application/use-cases/StopPlayback";
+import { GuildPlaybackSettingsService } from "../../application/services/GuildPlaybackSettingsService";
 import { PlaybackQueueService } from "../../application/services/PlaybackQueueService";
 import type { SearchProvider } from "../../application/ports/outbound/SearchSessionRepositoryPort";
 import { DiscordInteractionHandler } from "../../infrastructure/discord/DiscordInteractionHandler";
 import { createDiscordClient } from "../../infrastructure/discord/client/createDiscordClient";
+import { InMemoryGuildPlaybackSettingsRepository } from "../../infrastructure/persistence/memory/InMemoryGuildPlaybackSettingsRepository";
 import { InMemoryGuildQueueRepository } from "../../infrastructure/persistence/memory/InMemoryGuildQueueRepository";
 import { InMemorySearchSessionRepository } from "../../infrastructure/persistence/memory/InMemorySearchSessionRepository";
 import { CompositeMusicCatalogAdapter } from "../../infrastructure/providers/CompositeMusicCatalogAdapter";
@@ -57,11 +62,19 @@ async function main(): Promise<void> {
   });
   const searchSessions = new InMemorySearchSessionRepository();
   const queueRepository = new InMemoryGuildQueueRepository();
+  const settingsRepository = new InMemoryGuildPlaybackSettingsRepository();
   const playbackQueueService = new PlaybackQueueService(
     queueRepository,
     streamResolver,
     voiceGateway,
+    undefined,
+    undefined,
+    {
+      relatedCatalog: compositeCatalog,
+      settingsRepository,
+    },
   );
+  const settingsService = new GuildPlaybackSettingsService(settingsRepository);
 
   const searchTracks: Record<SearchProvider, SearchTracks> = {
     all: new SearchTracks(compositeCatalog),
@@ -95,6 +108,9 @@ async function main(): Promise<void> {
     stopPlayback: new StopPlayback(playbackQueueService),
     pausePlayback: new PausePlayback(playbackQueueService),
     resumePlayback: new ResumePlayback(playbackQueueService),
+    getPlaybackSettings: new GetPlaybackSettings(settingsService),
+    setAutoplayMode: new SetAutoplayMode(settingsService),
+    setPlaybackMood: new SetPlaybackMood(settingsService),
   });
 
   client.once(Events.ClientReady, (readyClient) => {

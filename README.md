@@ -15,6 +15,8 @@ Supported playback paths:
 
 YouTube watch pages and Spotify track pages are not treated as direct audio. Spotify does not expose full-track audio streams for Discord bots, so Spotify links are metadata first and require a separate playable-source resolver.
 
+The bot is designed for persistent voice presence and does not auto-leave on idle by default.
+
 ## Requirements
 
 - Node.js 20 or newer
@@ -65,7 +67,7 @@ npm run dev
 ## Commands
 
 - `/join` joins your current voice channel.
-- `/play query:<text-or-url>` joins your voice channel and starts playback immediately from a resolver-supported source.
+- `/play query:<text-or-url>` joins your voice channel and starts playback immediately from a resolver-supported source. If something is already playing, this intentionally interrupts the current track while preserving upcoming queue items.
 - `/search query:<text> provider:<all|youtube|spotify>` stores search results for the server.
 - `/pick number:<1-10>` selects a result from the latest `/search`.
 - `/selected` shows the currently selected track.
@@ -77,6 +79,8 @@ npm run dev
 - `/remove position:<n>` removes an upcoming queued track.
 - `/pause` pauses playback.
 - `/resume` resumes playback.
+- `/autoplay mode:<status|off|related>` controls opt-in related-track continuation per server.
+- `/mood preset:<status|balanced|focus|chill|upbeat>` sets a lightweight mood preset for related suggestions.
 - `/stop` stops playback.
 - `/leave` leaves the voice channel.
 
