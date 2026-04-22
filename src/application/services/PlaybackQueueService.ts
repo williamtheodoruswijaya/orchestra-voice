@@ -9,7 +9,10 @@ import { TrackSimilarityScorer } from "../../domain/services/TrackSimilarityScor
 import type { GuildPlaybackSettingsRepositoryPort } from "../ports/outbound/GuildPlaybackSettingsRepositoryPort";
 import type { MusicCatalogPort } from "../ports/outbound/MusicCatalogPort";
 import type { QueueRepositoryPort } from "../ports/outbound/QueueRepositoryPort";
-import type { ResolvedAudioSource, StreamResolverPort } from "../ports/outbound/StreamResolverPort";
+import type {
+  ResolvedAudioSource,
+  StreamResolverPort,
+} from "../ports/outbound/StreamResolverPort";
 import type { VoiceGatewayPort } from "../ports/outbound/VoiceGatewayPort";
 
 interface QueueRequestContext {
@@ -82,7 +85,8 @@ export class PlaybackQueueService {
   ) {
     this.relatedCatalog = options.relatedCatalog;
     this.settingsRepository = options.settingsRepository;
-    this.similarityScorer = options.similarityScorer ?? new TrackSimilarityScorer();
+    this.similarityScorer =
+      options.similarityScorer ?? new TrackSimilarityScorer();
     this.relatedScoreThreshold = options.relatedScoreThreshold ?? 0.18;
   }
 
@@ -95,6 +99,19 @@ export class PlaybackQueueService {
       input.requestedBy,
     );
 
+    const isPlaying = queue.current !== null;
+
+    if (isPlaying) {
+      queue.enqueue(item);
+      await this.queueRepository.save(queue);
+
+      return {
+        item,
+        queue: queue.toState(),
+        resolvedAudioSource,
+      };
+    }
+
     queue.playNow(item);
     await this.queueRepository.save(queue);
 
@@ -103,7 +120,6 @@ export class PlaybackQueueService {
         guildId: input.guildId,
         ...resolvedAudioSource,
       });
-      await this.queueRepository.save(queue);
     } catch (error) {
       queue.rollbackCurrentToFront();
       await this.queueRepository.save(queue);
@@ -171,7 +187,10 @@ export class PlaybackQueueService {
     const nextItem = queue.finishCurrent();
 
     if (!nextItem) {
-      const relatedCandidate = await this.findRelatedTrack(guildId, finishedItem.track);
+      const relatedCandidate = await this.findRelatedTrack(
+        guildId,
+        finishedItem.track,
+      );
 
       if (!relatedCandidate) {
         await this.queueRepository.save(queue);
@@ -381,7 +400,10 @@ export class PlaybackQueueService {
     };
   }
 
-  private toTrack(source: string | Track, resolved: ResolvedAudioSource): Track {
+  private toTrack(
+    source: string | Track,
+    resolved: ResolvedAudioSource,
+  ): Track {
     if (typeof source !== "string") {
       return source;
     }
