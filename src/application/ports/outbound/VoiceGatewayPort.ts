@@ -20,4 +20,9 @@ export interface VoiceGatewayPort {
   play(request: PlayAudioRequest): Promise<void>;
   leave(guildId: string): Promise<void>;
   stop(guildId: string): Promise<void>;
+  pause(guildId: string): Promise<boolean>;
+  resume(guildId: string): Promise<boolean>;
+  onPlaybackFinished(
+    listener: (guildId: string) => void | Promise<void>,
+  ): void;
 }

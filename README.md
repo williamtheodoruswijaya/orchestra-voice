@@ -1,13 +1,19 @@
 # Orchestra Voice
 
-A Discord music bot that can join a voice channel and play music from:
+A Discord music bot that can join a voice channel, search music metadata, and manage a per-server playback queue.
 
-- YouTube URLs
-- Spotify track URLs
-- Plain song search text
-- Direct audio URLs
+Supported metadata providers:
 
-Spotify does not expose full-track audio streams for Discord bots, so Spotify links are resolved through Spotify metadata and played from the closest YouTube result.
+- YouTube search metadata
+- Spotify search metadata
+
+Supported playback paths:
+
+- Direct playable audio URLs after URL validation
+- YouTube or Spotify metadata only when an explicit playable-source resolver can resolve audio through `yt-dlp`
+- Plain search text through the configured resolver
+
+YouTube watch pages and Spotify track pages are not treated as direct audio. Spotify does not expose full-track audio streams for Discord bots, so Spotify links are metadata first and require a separate playable-source resolver.
 
 ## Requirements
 
@@ -59,12 +65,22 @@ npm run dev
 ## Commands
 
 - `/join` joins your current voice channel.
-- `/play query:<text-or-url>` joins your voice channel and plays a YouTube URL, Spotify track URL, direct audio URL, or YouTube search result.
+- `/play query:<text-or-url>` joins your voice channel and starts playback immediately from a resolver-supported source.
 - `/search query:<text> provider:<all|youtube|spotify>` stores search results for the server.
-- `/pick number:<1-10>` picks and plays a result from the latest `/search`.
+- `/pick number:<1-10>` selects a result from the latest `/search`.
 - `/selected` shows the currently selected track.
+- `/enqueue` adds the selected track to the queue without interrupting current playback.
+- `/queue` shows the current and upcoming queue state.
+- `/nowplaying` shows the current track.
+- `/skip` skips the current track.
+- `/clearqueue` clears upcoming tracks without stopping the current track.
+- `/remove position:<n>` removes an upcoming queued track.
+- `/pause` pauses playback.
+- `/resume` resumes playback.
 - `/stop` stops playback.
 - `/leave` leaves the voice channel.
+
+For deeper setup and architecture notes, see `GETTING_STARTED.md`.
 
 ## yt-dlp
 

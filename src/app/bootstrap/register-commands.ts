@@ -76,7 +76,7 @@ async function main(): Promise<void> {
 
     new SlashCommandBuilder()
       .setName("pick")
-      .setDescription("Pick and play a track from your latest search results")
+      .setDescription("Select a metadata result from your latest search")
       .addIntegerOption((option) =>
         option
           .setName("number")
@@ -90,6 +90,53 @@ async function main(): Promise<void> {
     new SlashCommandBuilder()
       .setName("selected")
       .setDescription("Show the currently selected track")
+      .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("enqueue")
+      .setDescription("Add the selected track to the playback queue")
+      .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("queue")
+      .setDescription("Show the current queue")
+      .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("nowplaying")
+      .setDescription("Show the current track")
+      .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("skip")
+      .setDescription("Skip the current track")
+      .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("clearqueue")
+      .setDescription("Clear upcoming queue items without stopping playback")
+      .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("remove")
+      .setDescription("Remove an upcoming item from the queue")
+      .addIntegerOption((option) =>
+        option
+          .setName("position")
+          .setDescription("Upcoming queue position to remove")
+          .setRequired(true)
+          .setMinValue(1),
+      )
+      .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("pause")
+      .setDescription("Pause current playback")
+      .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("resume")
+      .setDescription("Resume paused playback")
       .toJSON(),
   ];
 

@@ -75,6 +75,9 @@ function validateAudioUrl(rawUrl: string): URL {
 
 export class DiscordVoiceGateway implements VoiceGatewayPort {
   private readonly players = new Map<string, AudioPlayer>();
+  private readonly playbackFinishedListeners: Array<
+    (guildId: string) => void | Promise<void>
+  > = [];
 
   private getOrCreatePlayer(guildId: string): AudioPlayer {
     const existingPlayer = this.players.get(guildId);
@@ -95,6 +98,7 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
 
     player.on(AudioPlayerStatus.Idle, () => {
       console.log(`[Voice:${guildId}] Audio player is idle.`);
+      void this.notifyPlaybackFinished(guildId);
     });
 
     player.on("error", (error) => {
@@ -103,6 +107,12 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
 
     this.players.set(guildId, player);
     return player;
+  }
+
+  private async notifyPlaybackFinished(guildId: string): Promise<void> {
+    await Promise.all(
+      this.playbackFinishedListeners.map(async (listener) => listener(guildId)),
+    );
   }
 
   async join(request: JoinVoiceRequest): Promise<void> {
@@ -209,5 +219,21 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
     if (player) {
       player.stop(true);
     }
+  }
+
+  async pause(guildId: string): Promise<boolean> {
+    const player = this.players.get(guildId);
+    return player?.pause() ?? false;
+  }
+
+  async resume(guildId: string): Promise<boolean> {
+    const player = this.players.get(guildId);
+    return player?.unpause() ?? false;
+  }
+
+  onPlaybackFinished(
+    listener: (guildId: string) => void | Promise<void>,
+  ): void {
+    this.playbackFinishedListeners.push(listener);
   }
 }

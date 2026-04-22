@@ -1,10 +1,10 @@
 import { QueueState } from "../../domain/entities/GuildQueue";
 import { PlaybackQueueService } from "../services/PlaybackQueueService";
 
-export class StopPlayback {
+export class PausePlayback {
   constructor(private readonly playbackQueueService: PlaybackQueueService) {}
 
   async execute(guildId: string): Promise<QueueState> {
-    return this.playbackQueueService.stop(guildId);
+    return this.playbackQueueService.pause(guildId);
   }
 }
