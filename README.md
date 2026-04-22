@@ -50,7 +50,7 @@ SPOTIFY_CLIENT_SECRET=
 SPOTIFY_MARKET=ID
 ```
 
-`YOUTUBE_API_KEY` is used by `/search`. `/play` can still play YouTube URLs and search text through `yt-dlp`.
+`YOUTUBE_API_KEY` is used by `/search`. `/play` can still resolve YouTube URLs and search text through `yt-dlp` when playback starts.
 
 4. Register guild slash commands:
 
@@ -67,7 +67,7 @@ npm run dev
 ## Commands
 
 - `/join` joins your current voice channel.
-- `/play query:<text-or-url>` joins your voice channel and starts playback immediately from a resolver-supported source. If something is already playing, this intentionally interrupts the current track while preserving upcoming queue items.
+- `/play query:<text-or-url>` joins your voice channel and starts playback from a resolver-supported source when idle. If something is already playing, the resolved item is added to the queue without interrupting the current track.
 - `/search query:<text> provider:<all|youtube|spotify>` stores search results for the server.
 - `/pick number:<1-10>` selects a result from the latest `/search`.
 - `/selected` shows the currently selected track.

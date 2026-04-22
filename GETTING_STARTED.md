@@ -179,7 +179,7 @@ If `yt-dlp` is not on `PATH`, set `YT_DLP_PATH` to the executable path.
   Pauses or resumes current playback.
 
 - `/play query:<text-or-url>`
-  Explicitly starts playback now through the playable-source resolver. If something is already playing, `/play` intentionally interrupts the current item and makes the requested item current. Existing upcoming queue items are preserved.
+  Resolves a playable source from text or URL input. If the player is idle, playback starts immediately. If something is already playing, the resolved item is added to the upcoming queue without interrupting the current item.
 
 - `/autoplay mode:<status|off|related>`
   Shows or changes related-track continuation for this guild. The default is `off`.
@@ -197,7 +197,7 @@ If `yt-dlp` is not on `PATH`, set `YT_DLP_PATH` to the executable path.
 
 Queue state is scoped per guild.
 
-Enqueueing while idle starts playback immediately. Enqueueing while already playing does not interrupt the current item.
+Enqueueing while idle starts playback immediately. Enqueueing while already playing does not interrupt the current item. `/play` follows the same comfort rule for active playback: it resolves the requested source and queues it instead of replacing the current song.
 
 When a track finishes naturally, the voice gateway notifies the application layer and the next queued item starts automatically.
 
@@ -233,7 +233,7 @@ npm run build
 
 The tests focus on domain and application behavior, including queue order, enqueue behavior, autoplay advancement, skip, clear, remove, and search-session selection.
 
-Additional coverage protects rollback on resolver and voice playback failure, `/play` interrupt semantics, related-track scoring, guild autoplay settings, and mood isolation.
+Additional coverage protects rollback on resolver and voice playback failure, `/play` queue-while-playing semantics, related-track scoring, guild autoplay settings, and mood isolation.
 
 ## CI
 
@@ -260,8 +260,8 @@ All checks must pass before a change is considered ready.
 
 - Metadata providers do not pretend to return playable audio.
 - Queue commands do not silently interrupt current playback.
-- `/play` remains the explicit immediate interrupt command.
-- `/enqueue` appends and does not interrupt current playback.
+- `/play` starts immediately only when idle and appends when playback is already active.
+- `/enqueue` appends selected metadata and does not interrupt current playback.
 - Related-track autoplay remains opt-in per guild.
 - Idle auto-leave is not introduced as a default behavior.
 - Discord handlers call application use cases instead of owning business logic.

@@ -185,12 +185,21 @@ export class DiscordInteractionHandler {
 
     await interaction.editReply({
       embeds: [
-        this.baseEmbed("Now playing")
+        this.baseEmbed(
+          result.startedPlayback ? "Now playing" : "Added to queue",
+        )
           .setDescription(this.formatQueueItem(result.item))
           .addFields(
             {
               name: "Voice channel",
               value: voiceChannelName,
+              inline: true,
+            },
+            {
+              name: "Queue position",
+              value: result.startedPlayback
+                ? "Playing now"
+                : `#${result.queuePosition}`,
               inline: true,
             },
             {

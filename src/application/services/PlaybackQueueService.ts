@@ -41,6 +41,8 @@ export interface EnqueueTrackResult extends QueueMutationResult {
 
 export interface PlayNowResult extends QueueMutationResult {
   item: QueueItem;
+  queuePosition: number;
+  startedPlayback: boolean;
   resolvedAudioSource: ResolvedAudioSource;
 }
 
@@ -99,21 +101,14 @@ export class PlaybackQueueService {
       input.requestedBy,
     );
 
-    console.log(
-      `Playing now in guild ${input.guildId}: ${item.track.title} (requested by ${item.requestedBy})`,
-    );
-    console.log(
-      `Queue currently has ${queue.upcoming.length} upcoming items and status "${queue.status}".`,
-    );
-
-    const isPlaying = queue.status === "playing";
-
-    if (isPlaying) {
-      queue.enqueue(item);
+    if (queue.isActive) {
+      const queuePosition = queue.enqueue(item);
       await this.queueRepository.save(queue);
 
       return {
         item,
+        queuePosition,
+        startedPlayback: false,
         queue: queue.toState(),
         resolvedAudioSource,
       };
@@ -135,6 +130,8 @@ export class PlaybackQueueService {
 
     return {
       item,
+      queuePosition: 0,
+      startedPlayback: true,
       queue: queue.toState(),
       resolvedAudioSource,
     };

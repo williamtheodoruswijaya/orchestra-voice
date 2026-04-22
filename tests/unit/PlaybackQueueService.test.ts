@@ -157,7 +157,7 @@ describe("PlaybackQueueService", () => {
     expect(voiceGateway.playCalls).toHaveLength(1);
   });
 
-  it("play now intentionally interrupts current playback while preserving upcoming items", async () => {
+  it("queues play requests while already playing without interrupting current playback", async () => {
     const { service, voiceGateway } = createService();
 
     await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
@@ -168,34 +168,36 @@ describe("PlaybackQueueService", () => {
       source: createTrack("now"),
     });
 
-    expect(result.queue.current?.track.title).toBe("Track now");
+    expect(result.startedPlayback).toBe(false);
+    expect(result.queuePosition).toBe(2);
+    expect(result.queue.current?.track.title).toBe("Track a");
     expect(result.queue.upcoming.map((item) => item.track.title)).toEqual([
       "Track b",
+      "Track now",
     ]);
     expect(voiceGateway.playCalls.map((call) => call.title)).toEqual([
       "Track a",
-      "Track now",
     ]);
   });
 
-  it("keeps a failed play-now item recoverable at the front of the queue", async () => {
-    const { service, voiceGateway } = createService();
+  it("does not mutate the active queue when resolving a busy play request fails", async () => {
+    const { service, streamResolver } = createService();
+    const failingTrack = createTrack("now");
 
     await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
     await service.enqueue({ guildId: "guild-a", track: createTrack("b") });
-    voiceGateway.failNextPlay = true;
+    streamResolver.failedTrackIds.add(failingTrack.id);
 
     await expect(
       service.playNow({
         guildId: "guild-a",
-        source: createTrack("now"),
+        source: failingTrack,
       }),
-    ).rejects.toThrow("Cannot play Track now");
+    ).rejects.toThrow("Cannot resolve Track now");
 
     const queue = await service.getQueue("guild-a");
-    expect(queue.current).toBeUndefined();
+    expect(queue.current?.track.title).toBe("Track a");
     expect(queue.upcoming.map((item) => item.track.title)).toEqual([
-      "Track now",
       "Track b",
     ]);
   });
