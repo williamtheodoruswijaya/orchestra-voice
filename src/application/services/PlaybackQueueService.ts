@@ -99,6 +99,13 @@ export class PlaybackQueueService {
       input.requestedBy,
     );
 
+    console.log(
+      `Playing now in guild ${input.guildId}: ${item.track.title} (requested by ${item.requestedBy})`,
+    );
+    console.log(
+      `Queue currently has ${queue.upcoming.length} upcoming items and status "${queue.status}".`,
+    );
+
     const isPlaying = queue.current !== null;
 
     if (isPlaying) {
