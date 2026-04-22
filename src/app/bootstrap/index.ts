@@ -1,14 +1,78 @@
 import "dotenv/config";
 import type { DiscordGatewayAdapterCreator } from "@discordjs/voice";
-import { Events, GuildMember, MessageFlags } from "discord.js";
+import {
+  ChatInputCommandInteraction,
+  Events,
+  GuildMember,
+  MessageFlags,
+} from "discord.js";
 import { JoinVoiceChannel } from "../../application/use-cases/JoinVoiceChannel";
 import { LeaveVoiceChannel } from "../../application/use-cases/LeaveVoiceChannel";
-import { createDiscordClient } from "../../infrastructure/discord/client/createDiscordClient";
-import { DiscordVoiceGateway } from "../../infrastructure/voice/DiscordVoiceGateway";
 import { StartPlayback } from "../../application/use-cases/StartPlayback";
 import { StopPlayback } from "../../application/use-cases/StopPlayback";
 import { SearchTracks } from "../../application/use-cases/SearchTracks";
+import { SaveSearchResults } from "../../application/use-cases/SaveSearchResults";
+import { PickTrack } from "../../application/use-cases/PickTrack";
+import { GetSelectedTrack } from "../../application/use-cases/GetSelectedTrack";
+import { SearchProvider } from "../../application/ports/outbound/SearchSessionRepositoryPort";
+import { Track } from "../../domain/entities/Track";
+import { createDiscordClient } from "../../infrastructure/discord/client/createDiscordClient";
+import { DiscordVoiceGateway } from "../../infrastructure/voice/DiscordVoiceGateway";
+import { YtDlpStreamResolver } from "../../infrastructure/voice/YtDlpStreamResolver";
 import { YouTubeCatalogAdapter } from "../../infrastructure/providers/youtube/YouTubeCatalogAdapter";
+import { SpotifyCatalogAdapter } from "../../infrastructure/providers/spotify/SpotifyCatalogAdapter";
+import { CompositeMusicCatalogAdapter } from "../../infrastructure/providers/CompositeMusicCatalogAdapter";
+import { InMemorySearchSessionRepository } from "../../infrastructure/persistence/memory/InMemorySearchSessionRepository";
+import { formatDurationMs } from "../../shared/utils/time";
+
+const SEARCH_PROVIDERS: SearchProvider[] = ["all", "youtube", "spotify"];
+
+function getSearchProvider(
+  interaction: ChatInputCommandInteraction,
+): SearchProvider {
+  const provider = interaction.options.getString("provider") ?? "all";
+
+  if (SEARCH_PROVIDERS.includes(provider as SearchProvider)) {
+    return provider as SearchProvider;
+  }
+
+  return "all";
+}
+
+function formatTrackTitle(track: Track): string {
+  return track.artist ? `${track.title} - ${track.artist}` : track.title;
+}
+
+function formatTrackResult(track: Track, index?: number): string {
+  const prefix = index === undefined ? "" : `${index + 1}. `;
+  const source = track.provider[0].toUpperCase() + track.provider.slice(1);
+  const duration = formatDurationMs(track.durationMs);
+  const pageUrl = track.pageUrl ? `\n${track.pageUrl}` : "";
+
+  return `${prefix}**${formatTrackTitle(track)}**\n${source} | ${duration}${pageUrl}`;
+}
+
+async function joinMemberVoiceChannel(
+  interaction: ChatInputCommandInteraction,
+  joinVoiceChannelUseCase: JoinVoiceChannel,
+): Promise<string | undefined> {
+  const member = interaction.member as GuildMember;
+  const voiceChannel = member.voice.channel;
+
+  if (!voiceChannel) {
+    await interaction.editReply("You need to join a voice channel first.");
+    return undefined;
+  }
+
+  await joinVoiceChannelUseCase.execute({
+    guildId: interaction.guildId!,
+    channelId: voiceChannel.id,
+    adapterCreator: voiceChannel.guild
+      .voiceAdapterCreator as DiscordGatewayAdapterCreator,
+  });
+
+  return voiceChannel.name;
+}
 
 async function main(): Promise<void> {
   const token = process.env.DISCORD_TOKEN;
@@ -20,13 +84,36 @@ async function main(): Promise<void> {
   const client = createDiscordClient();
 
   const voiceGateway = new DiscordVoiceGateway();
-  const youtubeApiKey = process.env.YOUTUBE_API_KEY ?? "";
-  const youtubeCatalog = new YouTubeCatalogAdapter(youtubeApiKey);
-  const searchTracksUseCase = new SearchTracks(youtubeCatalog);
+  const youtubeCatalog = new YouTubeCatalogAdapter(
+    process.env.YOUTUBE_API_KEY ?? "",
+  );
+  const spotifyCatalog = new SpotifyCatalogAdapter(
+    process.env.SPOTIFY_CLIENT_ID ?? "",
+    process.env.SPOTIFY_CLIENT_SECRET ?? "",
+    process.env.SPOTIFY_MARKET ?? "ID",
+  );
+  const compositeCatalog = new CompositeMusicCatalogAdapter([
+    youtubeCatalog,
+    spotifyCatalog,
+  ]);
+  const streamResolver = new YtDlpStreamResolver({
+    spotifyCatalog,
+    ytDlpPath: process.env.YT_DLP_PATH,
+  });
+  const searchSessions = new InMemorySearchSessionRepository();
+
+  const searchTrackUseCases: Record<SearchProvider, SearchTracks> = {
+    all: new SearchTracks(compositeCatalog),
+    youtube: new SearchTracks(youtubeCatalog),
+    spotify: new SearchTracks(spotifyCatalog),
+  };
   const joinVoiceChannelUseCase = new JoinVoiceChannel(voiceGateway);
   const leaveVoiceChannelUseCase = new LeaveVoiceChannel(voiceGateway);
-  const startPlaybackUseCase = new StartPlayback(voiceGateway);
+  const startPlaybackUseCase = new StartPlayback(voiceGateway, streamResolver);
   const stopPlaybackUseCase = new StopPlayback(voiceGateway);
+  const saveSearchResultsUseCase = new SaveSearchResults(searchSessions);
+  const pickTrackUseCase = new PickTrack(searchSessions);
+  const getSelectedTrackUseCase = new GetSelectedTrack(searchSessions);
 
   client.once(Events.ClientReady, (readyClient) => {
     console.log(`Logged in as ${readyClient.user.tag}`);
@@ -54,56 +141,48 @@ async function main(): Promise<void> {
       if (interaction.commandName === "join") {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-        const member = interaction.member as GuildMember;
-        const voiceChannel = member.voice.channel;
+        const voiceChannelName = await joinMemberVoiceChannel(
+          interaction,
+          joinVoiceChannelUseCase,
+        );
 
-        if (!voiceChannel) {
-          await interaction.editReply(
-            "You need to join a voice channel first.",
-          );
-          return;
-        }
+        if (!voiceChannelName) return;
 
-        await joinVoiceChannelUseCase.execute({
-          guildId: interaction.guildId!,
-          channelId: voiceChannel.id,
-          adapterCreator: voiceChannel.guild
-            .voiceAdapterCreator as DiscordGatewayAdapterCreator,
-        });
-
-        await interaction.editReply(`Joined **${voiceChannel.name}**.`);
+        await interaction.editReply(`Joined **${voiceChannelName}**.`);
         return;
       }
 
       if (interaction.commandName === "play") {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-        const member = interaction.member as GuildMember;
-        const voiceChannel = member.voice.channel;
+        const source =
+          interaction.options.getString("query") ??
+          interaction.options.getString("url");
 
-        if (!voiceChannel) {
+        if (!source) {
           await interaction.editReply(
-            "You need to join a voice channel first.",
+            "Provide a YouTube URL, Spotify track URL, or search query.",
           );
           return;
         }
 
-        const url = interaction.options.getString("url", true);
+        const voiceChannelName = await joinMemberVoiceChannel(
+          interaction,
+          joinVoiceChannelUseCase,
+        );
 
-        await joinVoiceChannelUseCase.execute({
+        if (!voiceChannelName) return;
+
+        const resolved = await startPlaybackUseCase.execute({
           guildId: interaction.guildId!,
-          channelId: voiceChannel.id,
-          adapterCreator: voiceChannel.guild
-            .voiceAdapterCreator as DiscordGatewayAdapterCreator,
+          source,
         });
 
-        await startPlaybackUseCase.execute({
-          guildId: interaction.guildId!,
-          url,
-          title: url,
-        });
-
-        await interaction.editReply(`Started playing audio from:\n${url}`);
+        await interaction.editReply(
+          `Now playing **${resolved.title}** in **${voiceChannelName}**.${
+            resolved.sourceUrl ? `\n${resolved.sourceUrl}` : ""
+          }`,
+        );
         return;
       }
 
@@ -129,20 +208,68 @@ async function main(): Promise<void> {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         const query = interaction.options.getString("query", true);
-        const tracks = await searchTracksUseCase.execute(query);
+        const provider = getSearchProvider(interaction);
+        const tracks = await searchTrackUseCases[provider].execute(query);
+
+        await saveSearchResultsUseCase.execute({
+          guildId: interaction.guildId!,
+          query,
+          provider,
+          results: tracks,
+        });
 
         if (tracks.length === 0) {
           await interaction.editReply(`No results found for: ${query}`);
           return;
         }
 
-        const lines = tracks.map((track, index) => {
-          return `${index + 1}. **${track.title}**
-Channel: ${track.artist ?? "Unknown"}
-URL: ${track.pageUrl ?? "-"}`;
+        await interaction.editReply(tracks.map(formatTrackResult).join("\n\n"));
+        return;
+      }
+
+      if (interaction.commandName === "pick") {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+        const number = interaction.options.getInteger("number", true);
+        const track = await pickTrackUseCase.execute({
+          guildId: interaction.guildId!,
+          number,
+        });
+        const voiceChannelName = await joinMemberVoiceChannel(
+          interaction,
+          joinVoiceChannelUseCase,
+        );
+
+        if (!voiceChannelName) return;
+
+        const resolved = await startPlaybackUseCase.execute({
+          guildId: interaction.guildId!,
+          source: track,
         });
 
-        await interaction.editReply(lines.join("\n\n"));
+        await interaction.editReply(
+          `Picked **${formatTrackTitle(track)}** and started playback in **${voiceChannelName}**.${
+            resolved.sourceUrl ? `\n${resolved.sourceUrl}` : ""
+          }`,
+        );
+        return;
+      }
+
+      if (interaction.commandName === "selected") {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+        const selectedTrack = await getSelectedTrackUseCase.execute(
+          interaction.guildId!,
+        );
+
+        if (!selectedTrack) {
+          await interaction.editReply(
+            "No track is selected yet. Run /search and /pick first.",
+          );
+          return;
+        }
+
+        await interaction.editReply(formatTrackResult(selectedTrack));
         return;
       }
     } catch (error) {

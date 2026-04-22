@@ -1,4 +1,5 @@
 import type { DiscordGatewayAdapterCreator } from "@discordjs/voice";
+import type { Readable } from "node:stream";
 
 export interface JoinVoiceRequest {
   guildId: string;
@@ -8,8 +9,10 @@ export interface JoinVoiceRequest {
 
 export interface PlayAudioRequest {
   guildId: string;
-  url: string;
-  title?: string;
+  title: string;
+  sourceUrl?: string;
+  stream?: Readable;
+  url?: string;
 }
 
 export interface VoiceGatewayPort {

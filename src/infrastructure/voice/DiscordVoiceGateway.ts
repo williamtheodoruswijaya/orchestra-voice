@@ -3,10 +3,10 @@ import {
   AudioPlayer,
   AudioPlayerStatus,
   NoSubscriberBehavior,
+  StreamType,
   VoiceConnectionStatus,
   createAudioPlayer,
   createAudioResource,
-  demuxProbe,
   entersState,
   getVoiceConnection,
   joinVoiceChannel,
@@ -16,8 +16,6 @@ import {
   PlayAudioRequest,
   VoiceGatewayPort,
 } from "../../application/ports/outbound/VoiceGatewayPort";
-
-const AUDIO_FETCH_TIMEOUT_MS = 10_000;
 
 function validateAudioUrl(rawUrl: string): URL {
   let parsed: URL;
@@ -159,53 +157,35 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
       );
     }
 
-    const validatedUrl = validateAudioUrl(request.url);
+    let input: Readable | string;
 
-    const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(),
-      AUDIO_FETCH_TIMEOUT_MS,
-    );
-
-    let response: Response;
-    try {
-      response = await fetch(validatedUrl.toString(), {
-        signal: controller.signal,
-      });
-    } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        throw new Error("Audio fetch timed out. Please try again.");
-      }
-      throw new Error("Failed to fetch audio URL. Please try again.");
-    } finally {
-      clearTimeout(timeout);
+    if (request.stream) {
+      input = request.stream;
+    } else if (request.url) {
+      input = validateAudioUrl(request.url).toString();
+    } else {
+      throw new Error("No playable audio source was resolved.");
     }
 
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch audio URL. HTTP status: ${response.status}`,
-      );
-    }
-
-    if (!response.body) {
-      throw new Error("Audio response does not contain a readable body.");
-    }
-
-    const inputStream = Readable.fromWeb(
-      response.body as unknown as Parameters<typeof Readable.fromWeb>[0],
-    );
-    const { stream, type } = await demuxProbe(inputStream);
-
-    const resource = createAudioResource(stream, {
-      inputType: type,
+    const resource = createAudioResource(input, {
+      inputType: StreamType.Arbitrary,
       metadata: {
-        title: request.title ?? request.url,
+        title: request.title,
+        sourceUrl: request.sourceUrl,
       },
     });
 
     const player = this.getOrCreatePlayer(request.guildId);
     connection.subscribe(player);
     player.play(resource);
+
+    try {
+      await entersState(player, AudioPlayerStatus.Playing, 20_000);
+    } catch {
+      throw new Error(
+        "Audio source was resolved, but playback did not start. Check yt-dlp, ffmpeg, and the source URL.",
+      );
+    }
   }
 
   async leave(guildId: string): Promise<void> {

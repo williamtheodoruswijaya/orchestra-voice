@@ -31,12 +31,12 @@ async function main(): Promise<void> {
 
     new SlashCommandBuilder()
       .setName("play")
-      .setDescription("Play audio from a direct media URL")
+      .setDescription("Play music from YouTube, Spotify, or search text")
       .addStringOption((option) =>
         option
-          .setName("url")
+          .setName("query")
           .setDescription(
-            "Direct audio URL, for example an MP3, OGG, WEBM, or stream URL",
+            "YouTube URL, Spotify track URL, direct audio URL, or song search",
           )
           .setRequired(true),
       )
@@ -54,13 +54,42 @@ async function main(): Promise<void> {
 
     new SlashCommandBuilder()
       .setName("search")
-      .setDescription("Search YouTube videos by keyword")
+      .setDescription("Search tracks from YouTube, Spotify, or both")
       .addStringOption((option) =>
         option
           .setName("query")
           .setDescription("Song title, artist, or keywords")
           .setRequired(true),
       )
+      .addStringOption((option) =>
+        option
+          .setName("provider")
+          .setDescription("Search provider")
+          .setRequired(false)
+          .addChoices(
+            { name: "All", value: "all" },
+            { name: "YouTube", value: "youtube" },
+            { name: "Spotify", value: "spotify" },
+          ),
+      )
+      .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("pick")
+      .setDescription("Pick and play a track from your latest search results")
+      .addIntegerOption((option) =>
+        option
+          .setName("number")
+          .setDescription("Result number to pick")
+          .setRequired(true)
+          .setMinValue(1)
+          .setMaxValue(10),
+      )
+      .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("selected")
+      .setDescription("Show the currently selected track")
       .toJSON(),
   ];
 
