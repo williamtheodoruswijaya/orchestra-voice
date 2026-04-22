@@ -3,10 +3,10 @@ import {
   PlaybackQueueService,
 } from "../services/PlaybackQueueService";
 
-export class PlayNextTrack {
+export class SkipTrack {
   constructor(private readonly playbackQueueService: PlaybackQueueService) {}
 
   async execute(guildId: string): Promise<AdvancePlaybackResult> {
-    return this.playbackQueueService.advanceAfterCurrent(guildId);
+    return this.playbackQueueService.skip(guildId);
   }
 }
