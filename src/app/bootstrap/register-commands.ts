@@ -1,22 +1,9 @@
 import "dotenv/config";
 import { REST, Routes, SlashCommandBuilder } from "discord.js";
+import { loadCommandRegistrationEnv } from "./env";
 
 async function main(): Promise<void> {
-  const token = process.env.DISCORD_TOKEN;
-  const clientId = process.env.DISCORD_CLIENT_ID;
-  const guildId = process.env.DISCORD_GUILD_ID;
-
-  if (!token) {
-    throw new Error("DISCORD_TOKEN is missing in .env");
-  }
-
-  if (!clientId) {
-    throw new Error("DISCORD_CLIENT_ID is missing in .env");
-  }
-
-  if (!guildId) {
-    throw new Error("DISCORD_GUILD_ID is missing in .env");
-  }
+  const runtimeEnv = loadCommandRegistrationEnv();
 
   const commands = [
     new SlashCommandBuilder()
@@ -174,11 +161,17 @@ async function main(): Promise<void> {
       .toJSON(),
   ];
 
-  const rest = new REST({ version: "10" }).setToken(token);
+  const rest = new REST({ version: "10" }).setToken(runtimeEnv.discordToken);
 
-  await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
-    body: commands,
-  });
+  await rest.put(
+    Routes.applicationGuildCommands(
+      runtimeEnv.discordClientId,
+      runtimeEnv.discordGuildId,
+    ),
+    {
+      body: commands,
+    },
+  );
 
   console.log("Guild slash commands registered successfully.");
 }

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { PlaybackQueueService } from "../../src/application/services/PlaybackQueueService";
 import type { ResolvedAudioSource, StreamResolverPort } from "../../src/application/ports/outbound/StreamResolverPort";
-import type { MusicCatalogPort } from "../../src/application/ports/outbound/MusicCatalogPort";
+import type {
+  MusicCatalogPort,
+  MusicCatalogSearchResult,
+  ProviderSearchStatus,
+} from "../../src/application/ports/outbound/MusicCatalogPort";
 import type {
   JoinVoiceRequest,
   PlayAudioRequest,
@@ -30,10 +34,29 @@ class FakeStreamResolver implements StreamResolverPort {
 }
 
 class FakeMusicCatalog implements MusicCatalogPort {
+  searchCalls = 0;
+
   constructor(private readonly tracks: Track[] = []) {}
 
   async search(_query: string): Promise<Track[]> {
+    this.searchCalls += 1;
     return this.tracks;
+  }
+}
+
+class DetailedFakeMusicCatalog implements MusicCatalogPort {
+  searchCalls = 0;
+
+  constructor(private readonly result: MusicCatalogSearchResult) {}
+
+  async search(_query: string): Promise<Track[]> {
+    const result = await this.searchDetailed(_query);
+    return result.tracks;
+  }
+
+  async searchDetailed(_query: string): Promise<MusicCatalogSearchResult> {
+    this.searchCalls += 1;
+    return this.result;
   }
 }
 
@@ -95,7 +118,7 @@ function createTrack(id: string): Track {
   };
 }
 
-function createService(): {
+function createService(options: { relatedCatalog?: MusicCatalogPort } = {}): {
   service: PlaybackQueueService;
   voiceGateway: FakeVoiceGateway;
   streamResolver: FakeStreamResolver;
@@ -114,7 +137,8 @@ function createService(): {
     })(),
     () => 1_700_000_000_000,
     {
-      relatedCatalog: new FakeMusicCatalog([createTrack("related")]),
+      relatedCatalog:
+        options.relatedCatalog ?? new FakeMusicCatalog([createTrack("related")]),
       settingsRepository,
     },
   );
@@ -442,5 +466,129 @@ describe("PlaybackQueueService", () => {
       "Track a",
       "Track related",
     ]);
+  });
+
+  it("stops related autoplay cleanly when providers are unavailable", async () => {
+    const failedStatus: ProviderSearchStatus = {
+      provider: "youtube",
+      status: "failed",
+      failure: {
+        provider: "youtube",
+        reason: "quota-exceeded",
+        operation: "search",
+        message: "YouTube search quota is exhausted.",
+        retryable: true,
+      },
+    };
+    const relatedCatalog = new DetailedFakeMusicCatalog({
+      tracks: [],
+      providerStatuses: [failedStatus],
+    });
+    const { service, voiceGateway, settingsRepository } = createService({
+      relatedCatalog,
+    });
+    const settings = await settingsRepository.getByGuildId("guild-a");
+    settings.enableRelatedAutoplay();
+    await settingsRepository.save(settings);
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+
+    const result = await service.advanceAfterCurrent("guild-a");
+
+    expect(result.autoplayStarted).toBe(false);
+    expect(result.autoplayStatus).toBe("provider-unavailable");
+    expect(result.providerStatuses).toEqual([failedStatus]);
+    expect(result.queue.current).toBeUndefined();
+    expect(result.queue.upcoming).toHaveLength(0);
+    expect(voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      "Track a",
+    ]);
+
+    const repeatedIdle = await service.advanceAfterCurrent("guild-a");
+
+    expect(repeatedIdle.autoplayStatus).toBe("not-needed");
+    expect(relatedCatalog.searchCalls).toBe(1);
+  });
+
+  it("distinguishes related autoplay no-candidate from provider failure", async () => {
+    const fulfilledStatus: ProviderSearchStatus = {
+      provider: "youtube",
+      status: "fulfilled",
+      resultCount: 0,
+    };
+    const { service, settingsRepository } = createService({
+      relatedCatalog: new DetailedFakeMusicCatalog({
+        tracks: [],
+        providerStatuses: [fulfilledStatus],
+      }),
+    });
+    const settings = await settingsRepository.getByGuildId("guild-a");
+    settings.enableRelatedAutoplay();
+    await settingsRepository.save(settings);
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+
+    const result = await service.advanceAfterCurrent("guild-a");
+
+    expect(result.autoplayStarted).toBe(false);
+    expect(result.autoplayStatus).toBe("no-candidate");
+    expect(result.providerStatuses).toEqual([fulfilledStatus]);
+  });
+
+  it("distinguishes related autoplay provider cooldown from no-candidate", async () => {
+    const cooldownStatus: ProviderSearchStatus = {
+      provider: "spotify",
+      status: "skipped",
+      reason: "cooldown",
+      failureReason: "account-restricted",
+      retryAfterMs: 60_000,
+      message: "Spotify search is on cooldown.",
+    };
+    const { service, settingsRepository } = createService({
+      relatedCatalog: new DetailedFakeMusicCatalog({
+        tracks: [],
+        providerStatuses: [cooldownStatus],
+      }),
+    });
+    const settings = await settingsRepository.getByGuildId("guild-a");
+    settings.enableRelatedAutoplay();
+    await settingsRepository.save(settings);
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+
+    const result = await service.advanceAfterCurrent("guild-a");
+
+    expect(result.autoplayStarted).toBe(false);
+    expect(result.autoplayStatus).toBe("provider-on-cooldown");
+    expect(result.providerStatuses).toEqual([cooldownStatus]);
+  });
+
+  it("treats unresolved related suggestions as metadata-only without queueing them", async () => {
+    const relatedTrack = createTrack("related");
+    const relatedCatalog = new FakeMusicCatalog([relatedTrack]);
+    const { service, voiceGateway, streamResolver, settingsRepository } =
+      createService({ relatedCatalog });
+    const settings = await settingsRepository.getByGuildId("guild-a");
+    settings.enableRelatedAutoplay();
+    await settingsRepository.save(settings);
+    streamResolver.failedTrackIds.add(relatedTrack.id);
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+
+    const result = await service.advanceAfterCurrent("guild-a");
+
+    expect(result.autoplayStarted).toBe(false);
+    expect(result.autoplayStatus).toBe("metadata-only");
+    expect(result.relatedCandidate?.title).toBe("Track related");
+    expect(result.queue.current).toBeUndefined();
+    expect(result.queue.upcoming).toHaveLength(0);
+    expect(voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      "Track a",
+    ]);
+
+    const repeatedIdle = await service.advanceAfterCurrent("guild-a");
+
+    expect(repeatedIdle.autoplayStatus).toBe("not-needed");
+    expect(relatedCatalog.searchCalls).toBe(1);
   });
 });

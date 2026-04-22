@@ -129,6 +129,103 @@ If implementing queueing:
 - playback should continue automatically to the next item when the current item finishes
 - stop / leave should clean up state predictably
 
+## Provider reliability rule
+
+This repository must treat external providers as unreliable by default.
+
+YouTube and Spotify integrations may fail due to:
+
+- quota exhaustion
+- premium/subscription requirements
+- account restrictions
+- credential misconfiguration
+- rate limits
+- temporary upstream outages
+
+Provider failures must not:
+
+- crash the bot
+- corrupt queue state
+- trigger infinite autoplay/search loops
+- spam repeated identical logs
+- fake playback from metadata-only URLs
+
+When a provider fails:
+
+- degrade gracefully
+- classify the failure clearly
+- keep user-facing feedback calm and honest
+- apply cooldown or suppression where repeated retries would be noisy or wasteful
+- prefer bounded fallback logic only when it is explicit and safe
+
+## Autoplay safety rule
+
+Autoplay and related-track continuation must be safe by default.
+
+If queue ends and autoplay is enabled:
+
+- attempt a bounded related-track lookup
+- do not retry endlessly in a loop
+- if provider lookup fails, stop continuation cleanly for that transition
+- preserve bot uptime and voice presence
+- do not auto-leave by default
+
+Autoplay should distinguish:
+
+- no related candidate
+- provider unavailable
+- provider on cooldown
+- metadata-only suggestion
+- playable continuation
+
+## Voice presence rule
+
+This bot is intended to remain online 24/7 and may remain connected to a voice channel continuously.
+
+Do not introduce idle auto-leave as a default behavior.
+
+If an idle-leave feature is ever added:
+
+- it must be optional
+- it must be explicit
+- it must be configurable per guild
+- it must be documented clearly
+
+Persistent voice presence is intentional product behavior.
+
+## Deployment/runtime rule
+
+Changes must remain deployable in long-running Node.js environments.
+
+Before considering a task complete:
+
+- confirm the real runtime entry point
+- avoid fragile startup assumptions
+- document environment requirements clearly
+- keep source-run vs build-run assumptions explicit
+
+## Skill routing guidance
+
+Use the appropriate repo-local skill when working in these areas:
+
+- `playback-semantics`
+  - `/play`, `/enqueue`, `/skip`, rollback, current/upcoming transitions
+
+- `autoplay-related`
+  - related-track continuation, autoplay settings, similarity scoring
+
+- `voice-comfort`
+  - low-noise UX, same-channel politeness, persistent voice presence behavior
+
+- `provider-resilience`
+  - quota handling, 403 handling, cooldown/backoff, fallback logic, no-loop guarantees
+
+- `deployment-runtime`
+  - startup entrypoint, runtime assumptions, hosting compatibility, env handling
+
+- `docs-and-onboarding`
+  - `GETTING_STARTED.md`, `README.md`, `.env.example`, contributor docs
+
 ## Testing expectations
 
 Every meaningful behavior change should come with tests where practical.
