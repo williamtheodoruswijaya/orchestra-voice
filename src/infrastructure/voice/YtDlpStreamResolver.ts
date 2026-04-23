@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { PassThrough } from "node:stream";
 import type { Track } from "../../domain/entities/Track";
 import type {
+  AudioSourceDescriptor,
   ResolvedAudioSource,
   StreamResolverPort,
 } from "../../application/ports/outbound/StreamResolverPort";
@@ -28,6 +29,52 @@ export class YtDlpStreamResolver implements StreamResolverPort {
   constructor(private readonly options: YtDlpStreamResolverOptions = {}) {
     this.ytDlpPath =
       options.ytDlpPath?.trim() || process.env.YT_DLP_PATH?.trim() || "yt-dlp";
+  }
+
+  async describe(source: string | Track): Promise<AudioSourceDescriptor> {
+    if (typeof source !== "string") {
+      return {
+        title: this.formatTrackTitle(source),
+        sourceUrl: source.pageUrl,
+      };
+    }
+
+    const trimmedSource = source.trim();
+
+    if (!trimmedSource) {
+      throw new Error("Playback source cannot be empty.");
+    }
+
+    const parsedUrl = this.tryParseUrl(trimmedSource);
+    const spotifyTrackId = this.getSpotifyTrackId(trimmedSource);
+
+    if (spotifyTrackId) {
+      const track = await this.getSpotifyTrack(spotifyTrackId);
+      return {
+        title: this.formatTrackTitle(track),
+        sourceUrl: track.pageUrl,
+      };
+    }
+
+    if (
+      trimmedSource.startsWith("spotify:") ||
+      (parsedUrl && this.isSpotifyUrl(parsedUrl))
+    ) {
+      throw new Error("Only Spotify track URLs are supported for playback.");
+    }
+
+    if (parsedUrl && this.isYouTubeUrl(parsedUrl)) {
+      return this.probe(trimmedSource, trimmedSource);
+    }
+
+    if (parsedUrl) {
+      return {
+        title: trimmedSource,
+        sourceUrl: trimmedSource,
+      };
+    }
+
+    return this.probe(`ytsearch1:${trimmedSource}`, trimmedSource);
   }
 
   async resolve(source: string | Track): Promise<ResolvedAudioSource> {

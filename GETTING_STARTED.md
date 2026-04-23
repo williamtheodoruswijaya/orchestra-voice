@@ -193,7 +193,7 @@ If `yt-dlp` is not on `PATH`, set `YT_DLP_PATH` to the executable path.
   Adds the selected track to the per-guild queue. If nothing is currently playing, playback starts. If something is already playing, the new item waits its turn.
 
 - `/queue`
-  Shows current playback state and upcoming queue items.
+  Shows current playback state and upcoming queue items. The queue display renders up to 20 upcoming items and splits long output across multiple embed fields so Discord field limits are not exceeded.
 
 - `/nowplaying`
   Shows the current queue item.
@@ -228,6 +228,8 @@ If `yt-dlp` is not on `PATH`, set `YT_DLP_PATH` to the executable path.
 ## Queue Behavior
 
 Queue state is scoped per guild.
+
+In-guild command replies are public so everyone can see who joined, queued, skipped, or otherwise changed playback.
 
 Enqueueing while idle starts playback immediately. Enqueueing while already playing does not interrupt the current item. `/play` follows the same comfort rule for active playback: it resolves the requested source and queues it instead of replacing the current song.
 

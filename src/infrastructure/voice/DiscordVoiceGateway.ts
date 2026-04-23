@@ -75,6 +75,7 @@ function validateAudioUrl(rawUrl: string): URL {
 
 export class DiscordVoiceGateway implements VoiceGatewayPort {
   private readonly players = new Map<string, AudioPlayer>();
+  private readonly suppressedIdleGuilds = new Set<string>();
   private readonly playbackFinishedListeners: Array<
     (guildId: string) => void | Promise<void>
   > = [];
@@ -93,11 +94,15 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
     });
 
     player.on(AudioPlayerStatus.Playing, () => {
+      this.suppressedIdleGuilds.delete(guildId);
       console.log(`[Voice:${guildId}] Audio started playing.`);
     });
 
     player.on(AudioPlayerStatus.Idle, () => {
       console.log(`[Voice:${guildId}] Audio player is idle.`);
+      if (this.suppressedIdleGuilds.delete(guildId)) {
+        return;
+      }
       void this.notifyPlaybackFinished(guildId);
     });
 
@@ -186,6 +191,9 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
     });
 
     const player = this.getOrCreatePlayer(request.guildId);
+    if (player.state.status !== AudioPlayerStatus.Idle) {
+      this.suppressedIdleGuilds.add(request.guildId);
+    }
     connection.subscribe(player);
     player.play(resource);
 
@@ -202,6 +210,9 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
     const player = this.players.get(guildId);
 
     if (player) {
+      if (player.state.status !== AudioPlayerStatus.Idle) {
+        this.suppressedIdleGuilds.add(guildId);
+      }
       player.stop(true);
       this.players.delete(guildId);
     }
@@ -217,6 +228,9 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
     const player = this.players.get(guildId);
 
     if (player) {
+      if (player.state.status !== AudioPlayerStatus.Idle) {
+        this.suppressedIdleGuilds.add(guildId);
+      }
       player.stop(true);
     }
   }

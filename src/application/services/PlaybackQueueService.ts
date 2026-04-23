@@ -14,6 +14,7 @@ import type {
 } from "../ports/outbound/MusicCatalogPort";
 import type { QueueRepositoryPort } from "../ports/outbound/QueueRepositoryPort";
 import type {
+  AudioSourceDescriptor,
   ResolvedAudioSource,
   StreamResolverPort,
 } from "../ports/outbound/StreamResolverPort";
@@ -121,15 +122,16 @@ export class PlaybackQueueService {
   }
 
   async playNow(input: PlayNowInput): Promise<PlayNowResult> {
-    const resolvedAudioSource = await this.streamResolver.resolve(input.source);
     const queue = await this.queueRepository.getByGuildId(input.guildId);
-    const item = this.createQueueItem(
-      input.guildId,
-      this.toTrack(input.source, resolvedAudioSource),
-      input.requestedBy,
-    );
 
     if (queue.isActive) {
+      const describedSource = await this.describeSource(input.source);
+      const item = this.createQueueItem(
+        input.guildId,
+        this.toTrack(input.source, describedSource),
+        input.requestedBy,
+        typeof input.source === "string" ? input.source : undefined,
+      );
       const queuePosition = queue.enqueue(item);
       await this.queueRepository.save(queue);
 
@@ -138,10 +140,17 @@ export class PlaybackQueueService {
         queuePosition,
         startedPlayback: false,
         queue: queue.toState(),
-        resolvedAudioSource,
+        resolvedAudioSource: describedSource,
       };
     }
 
+    const resolvedAudioSource = await this.streamResolver.resolve(input.source);
+    const item = this.createQueueItem(
+      input.guildId,
+      this.toTrack(input.source, resolvedAudioSource),
+      input.requestedBy,
+      typeof input.source === "string" ? input.source : undefined,
+    );
     queue.playNow(item);
     await this.queueRepository.save(queue);
 
@@ -424,12 +433,35 @@ export class PlaybackQueueService {
     guildId: string,
     item: QueueItem,
   ): Promise<ResolvedAudioSource> {
-    const resolvedAudioSource = await this.streamResolver.resolve(item.track);
+    const resolvedAudioSource = await this.streamResolver.resolve(
+      item.playbackSource ?? item.track,
+    );
     await this.voiceGateway.play({
       guildId,
       ...resolvedAudioSource,
     });
     return resolvedAudioSource;
+  }
+
+  private async describeSource(
+    source: string | Track,
+  ): Promise<AudioSourceDescriptor> {
+    if (typeof source !== "string") {
+      return {
+        title: source.title,
+        sourceUrl: source.pageUrl,
+      };
+    }
+
+    if (this.streamResolver.describe) {
+      return this.streamResolver.describe(source);
+    }
+
+    const resolvedAudioSource = await this.streamResolver.resolve(source);
+    return {
+      title: resolvedAudioSource.title,
+      sourceUrl: resolvedAudioSource.sourceUrl,
+    };
   }
 
   private async findRelatedTrack(
@@ -534,11 +566,13 @@ export class PlaybackQueueService {
     guildId: string,
     track: Track,
     requestedBy?: string,
+    playbackSource?: string,
   ): QueueItem {
     return {
       id: this.idGenerator(),
       guildId,
       track,
+      playbackSource,
       requestedBy,
       enqueuedAt: this.clock(),
     };
@@ -546,7 +580,7 @@ export class PlaybackQueueService {
 
   private toTrack(
     source: string | Track,
-    resolved: ResolvedAudioSource,
+    resolved: AudioSourceDescriptor,
   ): Track {
     if (typeof source !== "string") {
       return source;

@@ -93,7 +93,7 @@ For production-like hosting, use `npm run build` followed by `npm start` instead
 - `/pick number:<1-10>` selects a result from the latest `/search`.
 - `/selected` shows the currently selected track.
 - `/enqueue` adds the selected track to the queue without interrupting current playback.
-- `/queue` shows the current and upcoming queue state.
+- `/queue` shows the current and upcoming queue state, with up to 20 upcoming items rendered safely across multiple embed fields.
 - `/nowplaying` shows the current track.
 - `/skip` skips the current track.
 - `/clearqueue` clears upcoming tracks without stopping the current track.
@@ -104,6 +104,8 @@ For production-like hosting, use `npm run build` followed by `npm start` instead
 - `/mood preset:<status|balanced|focus|chill|upbeat>` sets a lightweight mood preset for related suggestions.
 - `/stop` stops playback.
 - `/leave` leaves the voice channel.
+
+Command responses are public in the server so everyone in the channel can see who queued or skipped tracks.
 
 For deeper setup and architecture notes, see `GETTING_STARTED.md`.
 

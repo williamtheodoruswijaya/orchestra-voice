@@ -4,7 +4,6 @@ import {
   EmbedBuilder,
   GuildMember,
   Interaction,
-  MessageFlags,
 } from "discord.js";
 import type { JoinVoiceChannel } from "../../application/use-cases/JoinVoiceChannel";
 import type { LeaveVoiceChannel } from "../../application/use-cases/LeaveVoiceChannel";
@@ -37,6 +36,7 @@ import type { Track } from "../../domain/entities/Track";
 import { formatDurationMs } from "../../shared/utils/time";
 
 const SEARCH_PROVIDERS: SearchProvider[] = ["all", "youtube", "spotify"];
+const EMBED_FIELD_VALUE_LIMIT = 1024;
 
 interface DiscordInteractionHandlerDependencies {
   joinVoiceChannel: JoinVoiceChannel;
@@ -79,12 +79,11 @@ export class DiscordInteractionHandler {
       if (!interaction.inGuild()) {
         await interaction.reply({
           content: "This command can only be used inside a server.",
-          flags: MessageFlags.Ephemeral,
         });
         return;
       }
 
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      await interaction.deferReply();
 
       switch (interaction.commandName) {
         case "join":
@@ -675,7 +674,7 @@ export class DiscordInteractionHandler {
     if (queue.current) {
       embed.addFields({
         name: `Now playing (${queue.status})`,
-        value: this.formatQueueItem(queue.current),
+        value: this.truncateEmbedFieldValue(this.formatQueueItem(queue.current)),
       });
     } else {
       embed.addFields({
@@ -685,15 +684,21 @@ export class DiscordInteractionHandler {
     }
 
     if (queue.upcoming.length > 0) {
-      const visibleUpcoming = queue.upcoming.slice(0, 10);
+      const visibleUpcoming = queue.upcoming.slice(0, 20);
       const hiddenCount = queue.upcoming.length - visibleUpcoming.length;
-      embed.addFields({
-        name: "Up next",
-        value: visibleUpcoming
-          .map((item, index) => `${index + 1}. ${this.formatQueueItem(item)}`)
-          .join("\n\n")
-          .concat(hiddenCount > 0 ? `\n\n...and ${hiddenCount} more.` : ""),
-      });
+      const chunks = this.chunkEmbedFieldValues(
+        visibleUpcoming.map(
+          (item, index) => `${index + 1}. ${this.formatQueueItem(item)}`,
+        ),
+        hiddenCount > 0 ? `...and ${hiddenCount} more.` : undefined,
+      );
+
+      embed.addFields(
+        chunks.map((chunk, index) => ({
+          name: index === 0 ? "Up next" : `Up next (${index + 1})`,
+          value: chunk,
+        })),
+      );
     } else {
       embed.addFields({
         name: "Up next",
@@ -707,6 +712,62 @@ export class DiscordInteractionHandler {
   private formatQueueItem(item: QueueItem): string {
     const requestedBy = item.requestedBy ? `\nRequested by <@${item.requestedBy}>` : "";
     return `${this.formatTrack(item.track)}${requestedBy}`;
+  }
+
+  private chunkEmbedFieldValues(
+    entries: string[],
+    footer?: string,
+  ): string[] {
+    const chunks: string[] = [];
+    let currentChunk = "";
+
+    for (const entry of entries) {
+      const safeEntry = this.truncateEmbedFieldValue(entry);
+      const nextChunk = currentChunk
+        ? `${currentChunk}\n\n${safeEntry}`
+        : safeEntry;
+
+      if (nextChunk.length <= EMBED_FIELD_VALUE_LIMIT) {
+        currentChunk = nextChunk;
+        continue;
+      }
+
+      if (currentChunk) {
+        chunks.push(currentChunk);
+      }
+
+      currentChunk = safeEntry;
+    }
+
+    if (footer) {
+      const safeFooter = this.truncateEmbedFieldValue(footer);
+      const footerChunk = currentChunk
+        ? `${currentChunk}\n\n${safeFooter}`
+        : safeFooter;
+
+      if (footerChunk.length <= EMBED_FIELD_VALUE_LIMIT) {
+        currentChunk = footerChunk;
+      } else {
+        if (currentChunk) {
+          chunks.push(currentChunk);
+        }
+        currentChunk = safeFooter;
+      }
+    }
+
+    if (currentChunk) {
+      chunks.push(currentChunk);
+    }
+
+    return chunks;
+  }
+
+  private truncateEmbedFieldValue(value: string): string {
+    if (value.length <= EMBED_FIELD_VALUE_LIMIT) {
+      return value;
+    }
+
+    return `${value.slice(0, EMBED_FIELD_VALUE_LIMIT - 3).trimEnd()}...`;
   }
 
   private formatTrack(track: Track): string {
@@ -831,13 +892,11 @@ export class DiscordInteractionHandler {
         } else {
           await interaction.reply({
             content: message,
-            flags: MessageFlags.Ephemeral,
           });
         }
       } else if (interaction.isRepliable()) {
         await interaction.reply({
           content: message,
-          flags: MessageFlags.Ephemeral,
         });
       }
     } catch (replyError) {
