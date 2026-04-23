@@ -6,6 +6,7 @@ export interface QueueItem {
   id: string;
   guildId: string;
   track: Track;
+  playbackSource?: string;
   requestedBy?: string;
   enqueuedAt: number;
 }

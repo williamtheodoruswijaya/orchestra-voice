@@ -75,6 +75,7 @@ function validateAudioUrl(rawUrl: string): URL {
 
 export class DiscordVoiceGateway implements VoiceGatewayPort {
   private readonly players = new Map<string, AudioPlayer>();
+  private readonly suppressedIdleNotifications = new Map<string, number>();
   private readonly playbackFinishedListeners: Array<
     (guildId: string) => void | Promise<void>
   > = [];
@@ -98,6 +99,9 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
 
     player.on(AudioPlayerStatus.Idle, () => {
       console.log(`[Voice:${guildId}] Audio player is idle.`);
+      if (this.consumeSuppressedIdleNotification(guildId)) {
+        return;
+      }
       void this.notifyPlaybackFinished(guildId);
     });
 
@@ -113,6 +117,27 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
     await Promise.all(
       this.playbackFinishedListeners.map(async (listener) => listener(guildId)),
     );
+  }
+
+  private suppressNextIdleNotification(guildId: string): void {
+    const current = this.suppressedIdleNotifications.get(guildId) ?? 0;
+    this.suppressedIdleNotifications.set(guildId, current + 1);
+  }
+
+  private consumeSuppressedIdleNotification(guildId: string): boolean {
+    const current = this.suppressedIdleNotifications.get(guildId) ?? 0;
+
+    if (current <= 0) {
+      return false;
+    }
+
+    if (current === 1) {
+      this.suppressedIdleNotifications.delete(guildId);
+    } else {
+      this.suppressedIdleNotifications.set(guildId, current - 1);
+    }
+
+    return true;
   }
 
   async join(request: JoinVoiceRequest): Promise<void> {
@@ -186,6 +211,9 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
     });
 
     const player = this.getOrCreatePlayer(request.guildId);
+    if (player.state.status !== AudioPlayerStatus.Idle) {
+      this.suppressNextIdleNotification(request.guildId);
+    }
     connection.subscribe(player);
     player.play(resource);
 
@@ -202,6 +230,9 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
     const player = this.players.get(guildId);
 
     if (player) {
+      if (player.state.status !== AudioPlayerStatus.Idle) {
+        this.suppressNextIdleNotification(guildId);
+      }
       player.stop(true);
       this.players.delete(guildId);
     }
@@ -217,6 +248,9 @@ export class DiscordVoiceGateway implements VoiceGatewayPort {
     const player = this.players.get(guildId);
 
     if (player) {
+      if (player.state.status !== AudioPlayerStatus.Idle) {
+        this.suppressNextIdleNotification(guildId);
+      }
       player.stop(true);
     }
   }

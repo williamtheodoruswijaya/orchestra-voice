@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { PlaybackQueueService } from "../../src/application/services/PlaybackQueueService";
-import type { ResolvedAudioSource, StreamResolverPort } from "../../src/application/ports/outbound/StreamResolverPort";
+import type {
+  AudioSourceDescriptor,
+  ResolvedAudioSource,
+  StreamResolverPort,
+} from "../../src/application/ports/outbound/StreamResolverPort";
 import type {
   MusicCatalogPort,
   MusicCatalogSearchResult,
@@ -17,8 +21,23 @@ import type { Track } from "../../src/domain/entities/Track";
 
 class FakeStreamResolver implements StreamResolverPort {
   readonly failedTrackIds = new Set<string>();
+  readonly describeInputs: Array<string | Track> = [];
+  readonly resolveInputs: Array<string | Track> = [];
+
+  async describe(source: string | Track): Promise<AudioSourceDescriptor> {
+    this.describeInputs.push(source);
+
+    const title = typeof source === "string" ? source : source.title;
+
+    return {
+      title,
+      sourceUrl: typeof source === "string" ? source : source.pageUrl,
+    };
+  }
 
   async resolve(source: string | Track): Promise<ResolvedAudioSource> {
+    this.resolveInputs.push(source);
+
     if (typeof source !== "string" && this.failedTrackIds.has(source.id)) {
       throw new Error(`Cannot resolve ${source.title}`);
     }
@@ -182,7 +201,7 @@ describe("PlaybackQueueService", () => {
   });
 
   it("queues play requests while already playing without interrupting current playback", async () => {
-    const { service, voiceGateway } = createService();
+    const { service, streamResolver, voiceGateway } = createService();
 
     await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
     await service.enqueue({ guildId: "guild-a", track: createTrack("b") });
@@ -199,12 +218,57 @@ describe("PlaybackQueueService", () => {
       "Track b",
       "Track now",
     ]);
+    expect(streamResolver.describeInputs).toHaveLength(0);
+    expect(streamResolver.resolveInputs).toHaveLength(1);
     expect(voiceGateway.playCalls.map((call) => call.title)).toEqual([
       "Track a",
     ]);
   });
 
-  it("does not mutate the active queue when resolving a busy play request fails", async () => {
+  it("describes string /play requests while busy without resolving audio until playback starts", async () => {
+    const { service, streamResolver } = createService();
+    const queuedSource = "https://www.youtube.com/watch?v=queued";
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+
+    const result = await service.playNow({
+      guildId: "guild-a",
+      source: queuedSource,
+    });
+
+    expect(result.startedPlayback).toBe(false);
+    expect(result.item.playbackSource).toBe(queuedSource);
+    expect(result.queue.current?.track.title).toBe("Track a");
+    expect(result.queue.upcoming.map((item) => item.track.title)).toEqual([
+      queuedSource,
+    ]);
+    expect(streamResolver.describeInputs).toEqual([queuedSource]);
+    expect(streamResolver.resolveInputs).toHaveLength(1);
+  });
+
+  it("reuses the original /play source when skip advances to the queued item", async () => {
+    const { service, streamResolver, voiceGateway } = createService();
+    const queuedSource = "spotify:track:1234567890123456789012";
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+    await service.playNow({
+      guildId: "guild-a",
+      source: queuedSource,
+    });
+
+    const result = await service.skip("guild-a");
+
+    expect(result.nextItem?.track.title).toBe(queuedSource);
+    expect(streamResolver.describeInputs).toEqual([queuedSource]);
+    expect(streamResolver.resolveInputs).toHaveLength(2);
+    expect(streamResolver.resolveInputs[1]).toBe(queuedSource);
+    expect(voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      "Track a",
+      queuedSource,
+    ]);
+  });
+
+  it("queues busy play requests without resolving audio immediately", async () => {
     const { service, streamResolver } = createService();
     const failingTrack = createTrack("now");
 
@@ -212,18 +276,20 @@ describe("PlaybackQueueService", () => {
     await service.enqueue({ guildId: "guild-a", track: createTrack("b") });
     streamResolver.failedTrackIds.add(failingTrack.id);
 
-    await expect(
-      service.playNow({
-        guildId: "guild-a",
-        source: failingTrack,
-      }),
-    ).rejects.toThrow("Cannot resolve Track now");
+    const result = await service.playNow({
+      guildId: "guild-a",
+      source: failingTrack,
+    });
 
     const queue = await service.getQueue("guild-a");
+    expect(result.startedPlayback).toBe(false);
     expect(queue.current?.track.title).toBe("Track a");
     expect(queue.upcoming.map((item) => item.track.title)).toEqual([
       "Track b",
+      "Track now",
     ]);
+    expect(streamResolver.describeInputs).toHaveLength(0);
+    expect(streamResolver.resolveInputs).toHaveLength(1);
   });
 
   it("rolls back an idle enqueue when playback fails", async () => {
