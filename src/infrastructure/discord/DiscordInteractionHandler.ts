@@ -34,6 +34,7 @@ import type {
 import type { QueueItem, QueueState } from "../../domain/entities/GuildQueue";
 import type { Track } from "../../domain/entities/Track";
 import { formatDurationMs } from "../../shared/utils/time";
+import { ContentValidator } from "../../domain/services/ContentValidator";
 
 const SEARCH_PROVIDERS: SearchProvider[] = ["all", "youtube", "spotify"];
 const EMBED_FIELD_VALUE_LIMIT = 1024;
@@ -63,7 +64,7 @@ interface DiscordInteractionHandlerDependencies {
 export class DiscordInteractionHandler {
   constructor(
     private readonly dependencies: DiscordInteractionHandlerDependencies,
-  ) {}
+  ) { }
 
   async handle(interaction: Interaction): Promise<void> {
     if (!interaction.isChatInputCommand()) return;
@@ -170,6 +171,12 @@ export class DiscordInteractionHandler {
       await interaction.editReply(
         "Provide a YouTube URL, Spotify track URL, direct audio URL, or search query.",
       );
+      return;
+    }
+
+    const validation = ContentValidator.isForbidden(source);
+    if (validation.forbidden) {
+      await interaction.editReply(`❌ Input ditolak: ${validation.reason}`);
       return;
     }
 
@@ -408,12 +415,12 @@ export class DiscordInteractionHandler {
     const settings =
       mode === "status"
         ? await this.dependencies.getPlaybackSettings.execute(
-            interaction.guildId!,
-          )
+          interaction.guildId!,
+        )
         : await this.dependencies.setAutoplayMode.execute({
-            guildId: interaction.guildId!,
-            mode,
-          });
+          guildId: interaction.guildId!,
+          mode,
+        });
 
     await interaction.editReply({
       embeds: [
@@ -433,12 +440,12 @@ export class DiscordInteractionHandler {
     const settings =
       mood === "status"
         ? await this.dependencies.getPlaybackSettings.execute(
-            interaction.guildId!,
-          )
+          interaction.guildId!,
+        )
         : await this.dependencies.setPlaybackMood.execute({
-            guildId: interaction.guildId!,
-            mood,
-          });
+          guildId: interaction.guildId!,
+          mood,
+        });
 
     await interaction.editReply({
       embeds: [
