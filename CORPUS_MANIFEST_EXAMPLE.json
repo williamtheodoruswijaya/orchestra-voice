@@ -1,0 +1,22 @@
+[
+  {
+    "id": "lofi-001",
+    "title": "Night Desk",
+    "artist": "Internal Corpus",
+    "tags": ["lofi", "focus", "chill"],
+    "source": {
+      "type": "file",
+      "path": "storage/corpus/night-desk.mp3"
+    }
+  },
+  {
+    "id": "stream-001",
+    "title": "Chill Stream",
+    "artist": "Internal Corpus",
+    "tags": ["ambient", "chill"],
+    "source": {
+      "type": "url",
+      "url": "https://example.com/audio/chill-stream.mp3"
+    }
+  }
+]

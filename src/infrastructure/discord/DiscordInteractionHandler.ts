@@ -64,7 +64,7 @@ interface DiscordInteractionHandlerDependencies {
 export class DiscordInteractionHandler {
   constructor(
     private readonly dependencies: DiscordInteractionHandlerDependencies,
-  ) { }
+  ) {}
 
   async handle(interaction: Interaction): Promise<void> {
     if (!interaction.isChatInputCommand()) return;
@@ -176,7 +176,7 @@ export class DiscordInteractionHandler {
 
     const validation = ContentValidator.isForbidden(source);
     if (validation.forbidden) {
-      await interaction.editReply(`❌ Input ditolak: ${validation.reason}`);
+      await interaction.editReply(`${validation.reason}`);
       return;
     }
 
@@ -387,9 +387,7 @@ export class DiscordInteractionHandler {
 
     await this.dependencies.pausePlayback.execute(interaction.guildId!);
     await interaction.editReply({
-      embeds: [
-        this.baseEmbed("Paused").setDescription("Playback is paused."),
-      ],
+      embeds: [this.baseEmbed("Paused").setDescription("Playback is paused.")],
     });
   }
 
@@ -415,12 +413,12 @@ export class DiscordInteractionHandler {
     const settings =
       mode === "status"
         ? await this.dependencies.getPlaybackSettings.execute(
-          interaction.guildId!,
-        )
+            interaction.guildId!,
+          )
         : await this.dependencies.setAutoplayMode.execute({
-          guildId: interaction.guildId!,
-          mode,
-        });
+            guildId: interaction.guildId!,
+            mode,
+          });
 
     await interaction.editReply({
       embeds: [
@@ -440,12 +438,12 @@ export class DiscordInteractionHandler {
     const settings =
       mood === "status"
         ? await this.dependencies.getPlaybackSettings.execute(
-          interaction.guildId!,
-        )
+            interaction.guildId!,
+          )
         : await this.dependencies.setPlaybackMood.execute({
-          guildId: interaction.guildId!,
-          mood,
-        });
+            guildId: interaction.guildId!,
+            mood,
+          });
 
     await interaction.editReply({
       embeds: [
@@ -681,7 +679,9 @@ export class DiscordInteractionHandler {
     if (queue.current) {
       embed.addFields({
         name: `Now playing (${queue.status})`,
-        value: this.truncateEmbedFieldValue(this.formatQueueItem(queue.current)),
+        value: this.truncateEmbedFieldValue(
+          this.formatQueueItem(queue.current),
+        ),
       });
     } else {
       embed.addFields({
@@ -717,14 +717,13 @@ export class DiscordInteractionHandler {
   }
 
   private formatQueueItem(item: QueueItem): string {
-    const requestedBy = item.requestedBy ? `\nRequested by <@${item.requestedBy}>` : "";
+    const requestedBy = item.requestedBy
+      ? `\nRequested by <@${item.requestedBy}>`
+      : "";
     return `${this.formatTrack(item.track)}${requestedBy}`;
   }
 
-  private chunkEmbedFieldValues(
-    entries: string[],
-    footer?: string,
-  ): string[] {
+  private chunkEmbedFieldValues(entries: string[], footer?: string): string[] {
     const chunks: string[] = [];
     let currentChunk = "";
 
@@ -794,7 +793,9 @@ export class DiscordInteractionHandler {
     return track.provider[0].toUpperCase() + track.provider.slice(1);
   }
 
-  private formatSettingsEmbed(settings: GuildPlaybackSettingsState): EmbedBuilder {
+  private formatSettingsEmbed(
+    settings: GuildPlaybackSettingsState,
+  ): EmbedBuilder {
     return this.baseEmbed("Playback settings")
       .setDescription(
         "These settings are scoped to this server. No idle auto-leave is enabled by default.",
