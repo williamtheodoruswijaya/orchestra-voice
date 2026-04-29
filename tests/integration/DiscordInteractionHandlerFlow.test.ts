@@ -15,12 +15,12 @@ import type {
 } from "../../src/application/ports/outbound/VoiceGatewayPort";
 import { ClearQueue } from "../../src/application/use-cases/ClearQueue";
 import { EnqueueTrack } from "../../src/application/use-cases/EnqueueTrack";
-import { GetNowPlaying } from "../../src/application/use-cases/GetNowPlaying";
 import { GetPlaybackSettings } from "../../src/application/use-cases/GetPlaybackSettings";
 import { GetQueue } from "../../src/application/use-cases/GetQueue";
 import { GetSelectedTrack } from "../../src/application/use-cases/GetSelectedTrack";
 import { JoinVoiceChannel } from "../../src/application/use-cases/JoinVoiceChannel";
 import { LeaveVoiceChannel } from "../../src/application/use-cases/LeaveVoiceChannel";
+import { LoopCurrentTrack } from "../../src/application/use-cases/LoopCurrentTrack";
 import { PausePlayback } from "../../src/application/use-cases/PausePlayback";
 import { PickTrack } from "../../src/application/use-cases/PickTrack";
 import { PlayNextTrack } from "../../src/application/use-cases/PlayNextTrack";
@@ -285,7 +285,7 @@ class InteractionHarness {
       playNowTrack: new PlayNowTrack(this.playbackQueueService),
       enqueueTrack: new EnqueueTrack(this.playbackQueueService),
       getQueue: new GetQueue(this.playbackQueueService),
-      getNowPlaying: new GetNowPlaying(this.playbackQueueService),
+      loopCurrentTrack: new LoopCurrentTrack(this.playbackQueueService),
       skipTrack: new SkipTrack(this.playbackQueueService),
       clearQueue: new ClearQueue(this.playbackQueueService),
       removeQueueItem: new RemoveQueueItem(this.playbackQueueService),
@@ -332,6 +332,10 @@ class InteractionHarness {
 
   async sendSkip(): Promise<FakeChatInputInteraction> {
     return this.sendCommand("skip");
+  }
+
+  async sendLoop(): Promise<FakeChatInputInteraction> {
+    return this.sendCommand("loop");
   }
 
   async sendQueue(): Promise<FakeChatInputInteraction> {
@@ -500,5 +504,160 @@ describe("Discord interaction handler integration", () => {
     ).toBe(true);
     expect(upNextContent).toContain("20.");
     expect(upNextContent).not.toContain("...and");
+  });
+
+  it("toggles /loop for the current song and leaves upcoming items waiting", async () => {
+    const [firstSong, secondSong] = buildSongFixtures(2);
+    const harness = new InteractionHarness([firstSong, secondSong]);
+
+    await harness.sendJoin();
+    await harness.sendPlay(firstSong.source);
+    await harness.sendPlay(secondSong.source);
+
+    const loopOnInteraction = await harness.sendLoop();
+    const loopOnPayload = getPayload(loopOnInteraction);
+    let queue = await harness.getQueue();
+
+    expectPublicReply(loopOnInteraction);
+    expect(loopOnPayload.embeds[0].title).toBe("Loop enabled");
+    expect(loopOnPayload.embeds[0].description).toContain(firstSong.title);
+    expect(queue.loopCurrent).toBe(true);
+
+    await harness.voiceGateway.finishCurrentTrack(harness.guildId);
+    queue = await harness.getQueue();
+
+    expect(harness.voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      firstSong.title,
+      firstSong.title,
+    ]);
+    expect(queue.current?.track.title).toBe(firstSong.title);
+    expect(queue.upcoming.map((item) => item.track.title)).toEqual([
+      secondSong.title,
+    ]);
+
+    const loopOffInteraction = await harness.sendLoop();
+    const loopOffPayload = getPayload(loopOffInteraction);
+
+    expectPublicReply(loopOffInteraction);
+    expect(loopOffPayload.embeds[0].title).toBe("Loop disabled");
+
+    await harness.voiceGateway.finishCurrentTrack(harness.guildId);
+    queue = await harness.getQueue();
+
+    expect(harness.voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      firstSong.title,
+      firstSong.title,
+      secondSong.title,
+    ]);
+    expect(queue.loopCurrent).toBe(false);
+    expect(queue.current?.track.title).toBe(secondSong.title);
+    expect(queue.upcoming).toHaveLength(0);
+  });
+
+  it("joins, plays, queues, skips, loops the current song 10 times, then continues after loop is disabled", async () => {
+    const [firstSong, loopedSong, nextSong] = buildSongFixtures(3);
+    const harness = new InteractionHarness([firstSong, loopedSong, nextSong]);
+
+    const joinInteraction = await harness.sendJoin();
+    const joinPayload = getPayload(joinInteraction);
+
+    expectPublicReply(joinInteraction);
+    expect(joinPayload.embeds[0].title).toBe("Joined voice channel");
+    expect(harness.voiceGateway.getJoinedChannel(harness.guildId)).toBe(
+      harness.voiceChannelId,
+    );
+
+    const firstPlayInteraction = await harness.sendPlay(firstSong.source);
+    const firstPlayPayload = getPayload(firstPlayInteraction);
+
+    expectPublicReply(firstPlayInteraction);
+    expect(firstPlayPayload.embeds[0].title).toBe("Now playing");
+    expect(harness.voiceGateway.getCurrentTitle(harness.guildId)).toBe(
+      firstSong.title,
+    );
+
+    const queuedPlayInteraction = await harness.sendPlay(loopedSong.source);
+    const queuedPlayPayload = getPayload(queuedPlayInteraction);
+    let queue = await harness.getQueue();
+
+    expectPublicReply(queuedPlayInteraction);
+    expect(queuedPlayPayload.embeds[0].title).toBe("Added to queue");
+    expect(queue.current?.track.title).toBe(firstSong.title);
+    expect(queue.upcoming.map((item) => item.track.title)).toEqual([
+      loopedSong.title,
+    ]);
+
+    const skipInteraction = await harness.sendSkip();
+    const skipPayload = getPayload(skipInteraction);
+    queue = await harness.getQueue();
+
+    expectPublicReply(skipInteraction);
+    expect(skipPayload.embeds[0].title).toBe("Skipped");
+    expect(skipPayload.embeds[0].description).toContain(loopedSong.title);
+    expect(harness.voiceGateway.getCurrentTitle(harness.guildId)).toBe(
+      loopedSong.title,
+    );
+    expect(queue.current?.track.title).toBe(loopedSong.title);
+    expect(queue.upcoming).toHaveLength(0);
+
+    const nextPlayInteraction = await harness.sendPlay(nextSong.source);
+    const nextPlayPayload = getPayload(nextPlayInteraction);
+    queue = await harness.getQueue();
+
+    expectPublicReply(nextPlayInteraction);
+    expect(nextPlayPayload.embeds[0].title).toBe("Added to queue");
+    expect(queue.current?.track.title).toBe(loopedSong.title);
+    expect(queue.upcoming.map((item) => item.track.title)).toEqual([
+      nextSong.title,
+    ]);
+
+    const loopOnInteraction = await harness.sendLoop();
+    const loopOnPayload = getPayload(loopOnInteraction);
+
+    expectPublicReply(loopOnInteraction);
+    expect(loopOnPayload.embeds[0].title).toBe("Loop enabled");
+    expect(loopOnPayload.embeds[0].description).toContain(loopedSong.title);
+
+    for (let loopCount = 1; loopCount <= 10; loopCount += 1) {
+      await harness.voiceGateway.finishCurrentTrack(harness.guildId);
+      queue = await harness.getQueue();
+
+      expect(harness.voiceGateway.getCurrentTitle(harness.guildId)).toBe(
+        loopedSong.title,
+      );
+      expect(queue.loopCurrent).toBe(true);
+      expect(queue.current?.track.title).toBe(loopedSong.title);
+      expect(queue.upcoming.map((item) => item.track.title)).toEqual([
+        nextSong.title,
+      ]);
+    }
+
+    expect(harness.voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      firstSong.title,
+      loopedSong.title,
+      ...Array.from({ length: 10 }, () => loopedSong.title),
+    ]);
+
+    const loopOffInteraction = await harness.sendLoop();
+    const loopOffPayload = getPayload(loopOffInteraction);
+
+    expectPublicReply(loopOffInteraction);
+    expect(loopOffPayload.embeds[0].title).toBe("Loop disabled");
+
+    await harness.voiceGateway.finishCurrentTrack(harness.guildId);
+    queue = await harness.getQueue();
+
+    expect(harness.voiceGateway.getCurrentTitle(harness.guildId)).toBe(
+      nextSong.title,
+    );
+    expect(queue.loopCurrent).toBe(false);
+    expect(queue.current?.track.title).toBe(nextSong.title);
+    expect(queue.upcoming).toHaveLength(0);
+    expect(harness.voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      firstSong.title,
+      loopedSong.title,
+      ...Array.from({ length: 10 }, () => loopedSong.title),
+      nextSong.title,
+    ]);
   });
 });

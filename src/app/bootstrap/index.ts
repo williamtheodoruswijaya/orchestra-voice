@@ -3,12 +3,12 @@ import { Events } from "discord.js";
 import { ProviderCooldownService } from "../../application/services/ProviderCooldownService";
 import { ClearQueue } from "../../application/use-cases/ClearQueue";
 import { EnqueueTrack } from "../../application/use-cases/EnqueueTrack";
-import { GetNowPlaying } from "../../application/use-cases/GetNowPlaying";
 import { GetPlaybackSettings } from "../../application/use-cases/GetPlaybackSettings";
 import { GetQueue } from "../../application/use-cases/GetQueue";
 import { GetSelectedTrack } from "../../application/use-cases/GetSelectedTrack";
 import { JoinVoiceChannel } from "../../application/use-cases/JoinVoiceChannel";
 import { LeaveVoiceChannel } from "../../application/use-cases/LeaveVoiceChannel";
+import { LoopCurrentTrack } from "../../application/use-cases/LoopCurrentTrack";
 import { PausePlayback } from "../../application/use-cases/PausePlayback";
 import { PickTrack } from "../../application/use-cases/PickTrack";
 import { PlayNextTrack } from "../../application/use-cases/PlayNextTrack";
@@ -126,7 +126,7 @@ async function main(): Promise<void> {
     playNowTrack: new PlayNowTrack(playbackQueueService),
     enqueueTrack: new EnqueueTrack(playbackQueueService),
     getQueue: new GetQueue(playbackQueueService),
-    getNowPlaying: new GetNowPlaying(playbackQueueService),
+    loopCurrentTrack: new LoopCurrentTrack(playbackQueueService),
     skipTrack: new SkipTrack(playbackQueueService),
     clearQueue: new ClearQueue(playbackQueueService),
     removeQueueItem: new RemoveQueueItem(playbackQueueService),

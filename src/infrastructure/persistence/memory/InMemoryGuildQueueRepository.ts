@@ -15,6 +15,7 @@ export class InMemoryGuildQueueRepository implements QueueRepositoryPort {
       current: existing.current,
       upcoming: existing.upcoming,
       status: existing.status,
+      loopCurrent: existing.loopCurrent,
     });
   }
 

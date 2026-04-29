@@ -342,6 +342,55 @@ describe("PlaybackQueueService", () => {
     ]);
   });
 
+  it("replays the current item when current-track loop is enabled", async () => {
+    const { service, voiceGateway } = createService();
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("b") });
+
+    const loopResult = await service.toggleCurrentLoop("guild-a");
+    const advanceResult = await service.advanceAfterCurrent("guild-a");
+
+    expect(loopResult.loopCurrent).toBe(true);
+    expect(advanceResult.nextItem?.track.title).toBe("Track a");
+    expect(advanceResult.queue.loopCurrent).toBe(true);
+    expect(advanceResult.queue.current?.track.title).toBe("Track a");
+    expect(advanceResult.queue.upcoming.map((item) => item.track.title)).toEqual(
+      ["Track b"],
+    );
+    expect(voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      "Track a",
+      "Track a",
+    ]);
+  });
+
+  it("turns off current-track loop when toggled again", async () => {
+    const { service, voiceGateway } = createService();
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("b") });
+
+    await service.toggleCurrentLoop("guild-a");
+    const loopOffResult = await service.toggleCurrentLoop("guild-a");
+    const advanceResult = await service.advanceAfterCurrent("guild-a");
+
+    expect(loopOffResult.loopCurrent).toBe(false);
+    expect(advanceResult.queue.loopCurrent).toBe(false);
+    expect(advanceResult.queue.current?.track.title).toBe("Track b");
+    expect(voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      "Track a",
+      "Track b",
+    ]);
+  });
+
+  it("rejects current-track loop when nothing is playing", async () => {
+    const { service } = createService();
+
+    await expect(service.toggleCurrentLoop("guild-a")).rejects.toThrow(
+      "There is nothing playing to loop.",
+    );
+  });
+
   it("skips the current item and starts the next item", async () => {
     const { service, voiceGateway } = createService();
 

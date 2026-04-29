@@ -95,6 +95,11 @@ async function main(): Promise<void> {
       .toJSON(),
 
     new SlashCommandBuilder()
+      .setName("loop")
+      .setDescription("Toggle repeat for the current track")
+      .toJSON(),
+
+    new SlashCommandBuilder()
       .setName("skip")
       .setDescription("Skip the current track")
       .toJSON(),
