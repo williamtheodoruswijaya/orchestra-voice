@@ -71,6 +71,11 @@ export interface AdvancePlaybackResult extends QueueMutationResult {
   autoplayFailureMessage?: string;
 }
 
+export interface LoopCurrentResult extends QueueMutationResult {
+  item: QueueItem;
+  loopCurrent: boolean;
+}
+
 export interface RemoveQueueItemResult extends QueueMutationResult {
   removedItem: QueueItem;
 }
@@ -223,6 +228,27 @@ export class PlaybackQueueService {
         autoplayStarted: false,
         autoplayStatus: "not-needed",
       };
+    }
+
+    if (queue.loopCurrent) {
+      const loopedItem = queue.current;
+
+      try {
+        const resolvedAudioSource = await this.playItem(guildId, loopedItem);
+        await this.queueRepository.save(queue);
+
+        return {
+          nextItem: loopedItem,
+          resolvedAudioSource,
+          queue: queue.toState(),
+          autoplayStarted: false,
+          autoplayStatus: "not-needed",
+        };
+      } catch (error) {
+        queue.rollbackCurrentToFront();
+        await this.queueRepository.save(queue);
+        throw error;
+      }
     }
 
     const finishedItem = queue.current;
@@ -393,6 +419,24 @@ export class PlaybackQueueService {
   async getNowPlaying(guildId: string): Promise<QueueItem | undefined> {
     const queue = await this.queueRepository.getByGuildId(guildId);
     return queue.current;
+  }
+
+  async toggleCurrentLoop(guildId: string): Promise<LoopCurrentResult> {
+    const queue = await this.queueRepository.getByGuildId(guildId);
+    const item = queue.current;
+
+    if (!item) {
+      throw new Error("There is nothing playing to loop.");
+    }
+
+    const loopCurrent = queue.toggleCurrentLoop();
+    await this.queueRepository.save(queue);
+
+    return {
+      item,
+      loopCurrent,
+      queue: queue.toState(),
+    };
   }
 
   async pause(guildId: string): Promise<QueueState> {

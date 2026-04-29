@@ -16,12 +16,14 @@ export interface QueueState {
   current?: QueueItem;
   upcoming: QueueItem[];
   status: PlaybackStatus;
+  loopCurrent: boolean;
 }
 
 export class GuildQueue {
   private currentItem?: QueueItem;
   private upcomingItems: QueueItem[];
   private playbackStatus: PlaybackStatus;
+  private currentLoopEnabled: boolean;
 
   constructor(
     public readonly guildId: string,
@@ -30,6 +32,8 @@ export class GuildQueue {
     this.currentItem = state?.current;
     this.upcomingItems = [...(state?.upcoming ?? [])];
     this.playbackStatus = state?.status ?? "idle";
+    this.currentLoopEnabled =
+      this.currentItem !== undefined ? (state?.loopCurrent ?? false) : false;
   }
 
   get current(): QueueItem | undefined {
@@ -44,6 +48,10 @@ export class GuildQueue {
     return this.playbackStatus;
   }
 
+  get loopCurrent(): boolean {
+    return this.currentLoopEnabled;
+  }
+
   get isActive(): boolean {
     return this.currentItem !== undefined && this.playbackStatus !== "idle";
   }
@@ -56,6 +64,7 @@ export class GuildQueue {
   playNow(item: QueueItem): void {
     this.currentItem = item;
     this.playbackStatus = "playing";
+    this.currentLoopEnabled = false;
   }
 
   startNext(): QueueItem | undefined {
@@ -63,6 +72,7 @@ export class GuildQueue {
 
     this.currentItem = nextItem;
     this.playbackStatus = nextItem ? "playing" : "idle";
+    this.currentLoopEnabled = false;
 
     return nextItem;
   }
@@ -78,6 +88,7 @@ export class GuildQueue {
   finishCurrent(): QueueItem | undefined {
     this.currentItem = undefined;
     this.playbackStatus = "idle";
+    this.currentLoopEnabled = false;
     return this.startNext();
   }
 
@@ -89,9 +100,19 @@ export class GuildQueue {
     const failedItem = this.currentItem;
     this.currentItem = undefined;
     this.playbackStatus = "idle";
+    this.currentLoopEnabled = false;
     this.upcomingItems.unshift(failedItem);
 
     return failedItem;
+  }
+
+  toggleCurrentLoop(): boolean {
+    if (!this.currentItem) {
+      throw new Error("There is nothing playing to loop.");
+    }
+
+    this.currentLoopEnabled = !this.currentLoopEnabled;
+    return this.currentLoopEnabled;
   }
 
   removeUpcoming(position: number): QueueItem {
@@ -118,6 +139,7 @@ export class GuildQueue {
   stop(): void {
     this.currentItem = undefined;
     this.playbackStatus = "idle";
+    this.currentLoopEnabled = false;
   }
 
   pause(): void {
@@ -142,6 +164,7 @@ export class GuildQueue {
       current: this.currentItem,
       upcoming: [...this.upcomingItems],
       status: this.playbackStatus,
+      loopCurrent: this.currentLoopEnabled,
     };
   }
 }

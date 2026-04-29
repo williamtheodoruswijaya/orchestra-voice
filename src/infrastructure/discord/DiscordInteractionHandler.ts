@@ -14,8 +14,8 @@ import type { GetSelectedTrack } from "../../application/use-cases/GetSelectedTr
 import type { PlayNowTrack } from "../../application/use-cases/PlayNowTrack";
 import type { EnqueueTrack } from "../../application/use-cases/EnqueueTrack";
 import type { GetQueue } from "../../application/use-cases/GetQueue";
-import type { GetNowPlaying } from "../../application/use-cases/GetNowPlaying";
 import type { GetPlaybackSettings } from "../../application/use-cases/GetPlaybackSettings";
+import type { LoopCurrentTrack } from "../../application/use-cases/LoopCurrentTrack";
 import type { SkipTrack } from "../../application/use-cases/SkipTrack";
 import type { ClearQueue } from "../../application/use-cases/ClearQueue";
 import type { RemoveQueueItem } from "../../application/use-cases/RemoveQueueItem";
@@ -49,7 +49,7 @@ interface DiscordInteractionHandlerDependencies {
   playNowTrack: PlayNowTrack;
   enqueueTrack: EnqueueTrack;
   getQueue: GetQueue;
-  getNowPlaying: GetNowPlaying;
+  loopCurrentTrack: LoopCurrentTrack;
   skipTrack: SkipTrack;
   clearQueue: ClearQueue;
   removeQueueItem: RemoveQueueItem;
@@ -101,6 +101,9 @@ export class DiscordInteractionHandler {
           return;
         case "nowplaying":
           await this.handleNowPlaying(interaction);
+          return;
+        case "loop":
+          await this.handleLoop(interaction);
           return;
         case "skip":
           await this.handleSkip(interaction);
@@ -287,9 +290,10 @@ export class DiscordInteractionHandler {
   private async handleNowPlaying(
     interaction: ChatInputCommandInteraction,
   ): Promise<void> {
-    const nowPlaying = await this.dependencies.getNowPlaying.execute(
+    const queue = await this.dependencies.getQueue.execute(
       interaction.guildId!,
     );
+    const nowPlaying = queue.current;
 
     if (!nowPlaying) {
       await interaction.editReply({
@@ -304,9 +308,37 @@ export class DiscordInteractionHandler {
 
     await interaction.editReply({
       embeds: [
-        this.baseEmbed("Now playing").setDescription(
-          this.formatQueueItem(nowPlaying),
-        ),
+        this.baseEmbed("Now playing")
+          .setDescription(this.formatQueueItem(nowPlaying))
+          .addFields({
+            name: "Loop",
+            value: queue.loopCurrent ? "On" : "Off",
+            inline: true,
+          }),
+      ],
+    });
+  }
+
+  private async handleLoop(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    if (!(await this.ensureSameVoiceChannel(interaction))) return;
+
+    const result = await this.dependencies.loopCurrentTrack.execute(
+      interaction.guildId!,
+    );
+
+    await interaction.editReply({
+      embeds: [
+        this.baseEmbed(result.loopCurrent ? "Loop enabled" : "Loop disabled")
+          .setDescription(this.formatQueueItem(result.item))
+          .addFields({
+            name: "Behavior",
+            value: result.loopCurrent
+              ? "This track will replay when it finishes. Upcoming tracks will keep waiting."
+              : "This track will finish normally and then continue to the next queued item.",
+            inline: false,
+          }),
       ],
     });
   }
@@ -678,7 +710,9 @@ export class DiscordInteractionHandler {
 
     if (queue.current) {
       embed.addFields({
-        name: `Now playing (${queue.status})`,
+        name: `Now playing (${queue.status}${
+          queue.loopCurrent ? ", looping" : ""
+        })`,
         value: this.truncateEmbedFieldValue(
           this.formatQueueItem(queue.current),
         ),

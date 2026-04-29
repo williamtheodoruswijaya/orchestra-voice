@@ -198,6 +198,9 @@ If `yt-dlp` is not on `PATH`, set `YT_DLP_PATH` to the executable path.
 - `/nowplaying`
   Shows the current queue item.
 
+- `/loop`
+  Toggles repeat for the current queue item. When enabled, the current item replays after it finishes and upcoming queue items keep waiting. Run `/loop` again to turn it off.
+
 - `/skip`
   Skips the current item and starts the next queued item when available.
 
@@ -234,6 +237,8 @@ In-guild command replies are public so everyone can see who joined, queued, skip
 Enqueueing while idle starts playback immediately. Enqueueing while already playing does not interrupt the current item. `/play` follows the same comfort rule for active playback: it resolves the requested source and queues it instead of replacing the current song.
 
 When a track finishes naturally, the voice gateway notifies the application layer and the next queued item starts automatically.
+
+If current-track loop is enabled with `/loop`, the finished current item is resolved and played again instead of advancing. The upcoming queue is preserved until loop is turned off or the current item is skipped/stopped. Looping does not auto-leave or create provider metadata assumptions; replay still goes through the same playable-source resolver path.
 
 If the queue is empty and `/autoplay mode:related` is enabled, the application searches metadata providers for a related candidate using deterministic scoring. The scorer uses normalized title similarity, token overlap, artist/channel overlap, provider match, and a small mood bonus. The candidate still has to go through the playable-source resolver before playback. Autoplay-generated suggestions are queued only after a playable source is resolved and playback starts.
 
