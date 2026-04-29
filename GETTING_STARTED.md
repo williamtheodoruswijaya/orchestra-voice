@@ -49,7 +49,7 @@ Infrastructure can implement application ports. Domain should remain pure.
 
 ## Provider Limits
 
-YouTube search results are metadata. A YouTube watch page URL is not direct audio. Playback requires a resolver such as the current `yt-dlp` based path.
+YouTube search results and playlist entries are metadata. A YouTube watch page URL is not direct audio. Playback requires a resolver such as the current `yt-dlp` based path.
 
 Spotify search results and Spotify track URLs are metadata. Spotify does not expose full-track audio streams for Discord bots. Spotify metadata can only be played when the resolver finds a separate playable source.
 
@@ -144,7 +144,7 @@ npm run dev
 
 ## YouTube API Key
 
-`YOUTUBE_API_KEY` is used for YouTube metadata search through `/search`.
+`YOUTUBE_API_KEY` is used for YouTube metadata search through `/search` and for expanding YouTube playlist URLs passed to `/play`.
 
 To set it up:
 
@@ -153,7 +153,7 @@ To set it up:
 3. Create an API key.
 4. Put the key in `.env` as `YOUTUBE_API_KEY`.
 
-This key is not what makes audio playable. It only powers metadata search.
+This key is not what makes audio playable. It only powers metadata search and playlist metadata lookup.
 
 ## Spotify Credentials
 
@@ -214,7 +214,7 @@ If `yt-dlp` is not on `PATH`, set `YT_DLP_PATH` to the executable path.
   Pauses or resumes current playback.
 
 - `/play query:<text-or-url>`
-  Resolves a playable source from text or URL input. If the player is idle, playback starts immediately. If something is already playing, the resolved item is added to the upcoming queue without interrupting the current item.
+  Resolves a playable source from text or URL input. If the player is idle, playback starts immediately. If the input is a YouTube playlist URL, each playlist entry is queued in order and the first item starts when idle. If something is already playing, the resolved item or playlist entries are added to the upcoming queue without interrupting the current item.
 
 - `/autoplay mode:<status|off|related>`
   Shows or changes related-track continuation for this guild. The default is `off`.
@@ -235,6 +235,8 @@ Queue state is scoped per guild.
 In-guild command replies are public so everyone can see who joined, queued, skipped, or otherwise changed playback.
 
 Enqueueing while idle starts playback immediately. Enqueueing while already playing does not interrupt the current item. `/play` follows the same comfort rule for active playback: it resolves the requested source and queues it instead of replacing the current song.
+
+When `/play` receives a YouTube playlist URL, the YouTube provider expands the playlist into ordered metadata `Track` items first. The queue stores those entries individually, and each item still goes through the playable-source resolver when it becomes current. This avoids treating a playlist page or YouTube watch page as direct audio.
 
 When a track finishes naturally, the voice gateway notifies the application layer and the next queued item starts automatically.
 

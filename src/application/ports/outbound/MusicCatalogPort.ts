@@ -30,7 +30,14 @@ export interface MusicCatalogSearchResult {
   providerStatuses: ProviderSearchStatus[];
 }
 
+export interface PlaylistLookupResult {
+  title?: string;
+  sourceUrl?: string;
+  tracks: Track[];
+}
+
 export interface MusicCatalogPort {
   search(query: string): Promise<Track[]>;
   searchDetailed?(query: string): Promise<MusicCatalogSearchResult>;
+  getPlaylist?(source: string): Promise<PlaylistLookupResult | undefined>;
 }

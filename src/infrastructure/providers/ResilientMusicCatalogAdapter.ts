@@ -2,11 +2,13 @@ import type { LoggerPort } from "../../application/ports/outbound/LoggerPort";
 import type {
   MusicCatalogPort,
   MusicCatalogSearchResult,
+  PlaylistLookupResult,
 } from "../../application/ports/outbound/MusicCatalogPort";
 import { ProviderCooldownService } from "../../application/services/ProviderCooldownService";
 import {
   classifyProviderFailure,
   type MetadataProvider,
+  ProviderFailureError,
 } from "../../application/services/ProviderFailureClassifier";
 
 export class ResilientMusicCatalogAdapter implements MusicCatalogPort {
@@ -79,6 +81,56 @@ export class ResilientMusicCatalogAdapter implements MusicCatalogPort {
           },
         ],
       };
+    }
+  }
+
+  async getPlaylist(
+    source: string,
+  ): Promise<PlaylistLookupResult | undefined> {
+    if (!this.catalog.getPlaylist) {
+      return undefined;
+    }
+
+    const cooldown = this.cooldowns.getCooldown(this.provider);
+
+    if (cooldown) {
+      throw new ProviderFailureError({
+        provider: this.provider,
+        reason: cooldown.failureReason,
+        operation: "playlist lookup",
+        message: cooldown.message,
+        retryable: true,
+        retryAfterMs: cooldown.retryAfterMs,
+      });
+    }
+
+    try {
+      const playlist = await this.catalog.getPlaylist(source);
+
+      if (playlist) {
+        this.cooldowns.recordSuccess(this.provider);
+      }
+
+      return playlist;
+    } catch (error) {
+      const failure = classifyProviderFailure(
+        error,
+        this.provider,
+        "playlist lookup",
+      );
+      const registration = this.cooldowns.recordFailure(failure);
+
+      if (registration.shouldLog) {
+        this.logger?.warn(failure.message, {
+          provider: failure.provider,
+          reason: failure.reason,
+          operation: failure.operation,
+          statusCode: failure.statusCode,
+          cooldownUntil: registration.cooldownUntil,
+        });
+      }
+
+      throw new ProviderFailureError(failure, { cause: error });
     }
   }
 }
