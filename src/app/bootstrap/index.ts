@@ -83,6 +83,7 @@ async function main(): Promise<void> {
     undefined,
     {
       relatedCatalog: compositeCatalog,
+      playlistCatalog: resilientYouTubeCatalog,
       settingsRepository,
     },
   );

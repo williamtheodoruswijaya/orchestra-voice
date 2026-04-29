@@ -5,6 +5,7 @@ A Discord music bot that can join a voice channel, search music metadata, and ma
 Supported metadata providers:
 
 - YouTube search metadata
+- YouTube playlist metadata
 - Spotify search metadata
 
 Supported playback paths:
@@ -69,7 +70,7 @@ SPOTIFY_CLIENT_SECRET=
 SPOTIFY_MARKET=ID
 ```
 
-`YOUTUBE_API_KEY` is used by `/search`. `/play` can still resolve YouTube URLs and search text through `yt-dlp` when playback starts.
+`YOUTUBE_API_KEY` is used by `/search` and by `/play` when expanding a YouTube playlist URL. `/play` can still resolve individual YouTube URLs and search text through `yt-dlp` when playback starts.
 
 4. Register guild slash commands:
 
@@ -88,7 +89,7 @@ For production-like hosting, use `npm run build` followed by `npm start` instead
 ## Commands
 
 - `/join` joins your current voice channel.
-- `/play query:<text-or-url>` joins your voice channel and starts playback from a resolver-supported source when idle. If something is already playing, the resolved item is added to the queue without interrupting the current track.
+- `/play query:<text-or-url>` joins your voice channel and starts playback from a resolver-supported source when idle. If you provide a YouTube playlist URL, each playlist item is added to the queue in order. If something is already playing, the requested item or playlist is added to the queue without interrupting the current track.
 - `/search query:<text> provider:<all|youtube|spotify>` stores search results for the server.
 - `/pick number:<1-10>` selects a result from the latest `/search`.
 - `/selected` shows the currently selected track.

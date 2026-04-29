@@ -10,6 +10,7 @@ import type { GuildPlaybackSettingsRepositoryPort } from "../ports/outbound/Guil
 import type {
   MusicCatalogPort,
   MusicCatalogSearchResult,
+  PlaylistLookupResult,
   ProviderSearchStatus,
 } from "../ports/outbound/MusicCatalogPort";
 import type { QueueRepositoryPort } from "../ports/outbound/QueueRepositoryPort";
@@ -49,6 +50,12 @@ export interface PlayNowResult extends QueueMutationResult {
   queuePosition: number;
   startedPlayback: boolean;
   resolvedAudioSource: ResolvedAudioSource;
+  playlist?: {
+    title?: string;
+    sourceUrl?: string;
+    trackCount: number;
+    items: QueueItem[];
+  };
 }
 
 export type AutoplayContinuationStatus =
@@ -89,6 +96,7 @@ type Clock = () => number;
 
 interface PlaybackQueueServiceOptions {
   relatedCatalog?: MusicCatalogPort;
+  playlistCatalog?: MusicCatalogPort;
   settingsRepository?: GuildPlaybackSettingsRepositoryPort;
   similarityScorer?: TrackSimilarityScorer;
   relatedScoreThreshold?: number;
@@ -107,6 +115,7 @@ interface RelatedTrackLookupResult {
 
 export class PlaybackQueueService {
   private readonly relatedCatalog?: MusicCatalogPort;
+  private readonly playlistCatalog?: MusicCatalogPort;
   private readonly settingsRepository?: GuildPlaybackSettingsRepositoryPort;
   private readonly similarityScorer: TrackSimilarityScorer;
   private readonly relatedScoreThreshold: number;
@@ -120,6 +129,7 @@ export class PlaybackQueueService {
     options: PlaybackQueueServiceOptions = {},
   ) {
     this.relatedCatalog = options.relatedCatalog;
+    this.playlistCatalog = options.playlistCatalog;
     this.settingsRepository = options.settingsRepository;
     this.similarityScorer =
       options.similarityScorer ?? new TrackSimilarityScorer();
@@ -127,6 +137,12 @@ export class PlaybackQueueService {
   }
 
   async playNow(input: PlayNowInput): Promise<PlayNowResult> {
+    const playlist = await this.findPlaylist(input.source);
+
+    if (playlist) {
+      return this.playPlaylist(input, playlist);
+    }
+
     const queue = await this.queueRepository.getByGuildId(input.guildId);
 
     if (queue.isActive) {
@@ -439,6 +455,78 @@ export class PlaybackQueueService {
     };
   }
 
+  private async playPlaylist(
+    input: PlayNowInput,
+    playlist: PlaylistLookupResult,
+  ): Promise<PlayNowResult> {
+    if (playlist.tracks.length === 0) {
+      throw new Error("The playlist does not contain any playable metadata.");
+    }
+
+    const queue = await this.queueRepository.getByGuildId(input.guildId);
+    const items = playlist.tracks.map((track) =>
+      this.createQueueItem(input.guildId, track, input.requestedBy),
+    );
+    const [firstItem] = items;
+
+    if (queue.isActive) {
+      let firstQueuePosition = 0;
+
+      for (const item of items) {
+        const queuePosition = queue.enqueue(item);
+        if (firstQueuePosition === 0) {
+          firstQueuePosition = queuePosition;
+        }
+      }
+
+      await this.queueRepository.save(queue);
+
+      return {
+        item: firstItem,
+        queuePosition: firstQueuePosition,
+        startedPlayback: false,
+        queue: queue.toState(),
+        resolvedAudioSource: this.describeTrackSource(firstItem.track),
+        playlist: {
+          title: playlist.title,
+          sourceUrl: playlist.sourceUrl,
+          trackCount: items.length,
+          items,
+        },
+      };
+    }
+
+    for (const item of items) {
+      queue.enqueue(item);
+    }
+
+    const nextItem = queue.startNext();
+    await this.queueRepository.save(queue);
+
+    try {
+      const resolvedAudioSource = await this.playItem(input.guildId, nextItem!);
+      await this.queueRepository.save(queue);
+
+      return {
+        item: nextItem!,
+        queuePosition: 0,
+        startedPlayback: true,
+        queue: queue.toState(),
+        resolvedAudioSource,
+        playlist: {
+          title: playlist.title,
+          sourceUrl: playlist.sourceUrl,
+          trackCount: items.length,
+          items,
+        },
+      };
+    } catch (error) {
+      queue.rollbackCurrentToFront();
+      await this.queueRepository.save(queue);
+      throw error;
+    }
+  }
+
   async pause(guildId: string): Promise<QueueState> {
     const queue = await this.queueRepository.getByGuildId(guildId);
     queue.pause();
@@ -506,6 +594,16 @@ export class PlaybackQueueService {
       title: resolvedAudioSource.title,
       sourceUrl: resolvedAudioSource.sourceUrl,
     };
+  }
+
+  private async findPlaylist(
+    source: string | Track,
+  ): Promise<PlaylistLookupResult | undefined> {
+    if (typeof source !== "string" || !this.playlistCatalog?.getPlaylist) {
+      return undefined;
+    }
+
+    return this.playlistCatalog.getPlaylist(source);
   }
 
   private async findRelatedTrack(
@@ -619,6 +717,13 @@ export class PlaybackQueueService {
       playbackSource,
       requestedBy,
       enqueuedAt: this.clock(),
+    };
+  }
+
+  private describeTrackSource(track: Track): ResolvedAudioSource {
+    return {
+      title: track.artist ? `${track.title} - ${track.artist}` : track.title,
+      sourceUrl: track.pageUrl,
     };
   }
 

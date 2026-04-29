@@ -18,12 +18,12 @@ async function main(): Promise<void> {
 
     new SlashCommandBuilder()
       .setName("play")
-      .setDescription("Play music from YouTube, Spotify, or search text")
+      .setDescription("Play music from YouTube, Spotify, playlist, or search text")
       .addStringOption((option) =>
         option
           .setName("query")
           .setDescription(
-            "YouTube URL, Spotify track URL, direct audio URL, or song search",
+            "YouTube video/playlist URL, Spotify track URL, direct URL, or song search",
           )
           .setRequired(true),
       )

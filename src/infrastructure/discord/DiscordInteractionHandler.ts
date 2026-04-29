@@ -193,6 +193,42 @@ export class DiscordInteractionHandler {
       requestedBy: interaction.user.id,
     });
 
+    if (result.playlist) {
+      await interaction.editReply({
+        embeds: [
+          this.baseEmbed(
+            result.startedPlayback ? "Playlist started" : "Playlist queued",
+          )
+            .setDescription(this.formatQueueItem(result.item))
+            .addFields(
+              {
+                name: "Voice channel",
+                value: voiceChannelName,
+                inline: true,
+              },
+              {
+                name: "Tracks",
+                value: `${result.playlist.trackCount}`,
+                inline: true,
+              },
+              {
+                name: "First item",
+                value: result.startedPlayback
+                  ? "Playing now"
+                  : `Queued at #${result.queuePosition}`,
+                inline: true,
+              },
+              {
+                name: "Playlist source",
+                value: result.playlist.sourceUrl ?? source,
+                inline: false,
+              },
+            ),
+        ],
+      });
+      return;
+    }
+
     await interaction.editReply({
       embeds: [
         this.baseEmbed(

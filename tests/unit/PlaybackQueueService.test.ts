@@ -8,6 +8,7 @@ import type {
 import type {
   MusicCatalogPort,
   MusicCatalogSearchResult,
+  PlaylistLookupResult,
   ProviderSearchStatus,
 } from "../../src/application/ports/outbound/MusicCatalogPort";
 import type {
@@ -58,6 +59,21 @@ class FakeMusicCatalog implements MusicCatalogPort {
   async search(_query: string): Promise<Track[]> {
     this.searchCalls += 1;
     return this.tracks;
+  }
+}
+
+class FakePlaylistCatalog implements MusicCatalogPort {
+  playlistCalls = 0;
+
+  constructor(private readonly playlists: Map<string, PlaylistLookupResult>) {}
+
+  async search(_query: string): Promise<Track[]> {
+    return [];
+  }
+
+  async getPlaylist(source: string): Promise<PlaylistLookupResult | undefined> {
+    this.playlistCalls += 1;
+    return this.playlists.get(source);
   }
 }
 
@@ -135,7 +151,12 @@ function createTrack(id: string): Track {
   };
 }
 
-function createService(options: { relatedCatalog?: MusicCatalogPort } = {}): {
+function createService(
+  options: {
+    relatedCatalog?: MusicCatalogPort;
+    playlistCatalog?: MusicCatalogPort;
+  } = {},
+): {
   service: PlaybackQueueService;
   voiceGateway: FakeVoiceGateway;
   streamResolver: FakeStreamResolver;
@@ -156,6 +177,7 @@ function createService(options: { relatedCatalog?: MusicCatalogPort } = {}): {
     {
       relatedCatalog:
         options.relatedCatalog ?? new FakeMusicCatalog([createTrack("related")]),
+      playlistCatalog: options.playlistCatalog,
       settingsRepository,
     },
   );
@@ -340,6 +362,136 @@ describe("PlaybackQueueService", () => {
       "Track a",
       queuedSource,
     ]);
+  });
+
+  it("starts the first playlist item and queues the rest when /play receives a playlist link while idle", async () => {
+    const playlistUrl =
+      "https://www.youtube.com/playlist?list=PL-orchestra-voice";
+    const playlistTracks = [
+      createTrack("playlist-a"),
+      createTrack("playlist-b"),
+      createTrack("playlist-c"),
+    ];
+    const playlistCatalog = new FakePlaylistCatalog(
+      new Map([
+        [
+          playlistUrl,
+          {
+            title: "Study playlist",
+            sourceUrl: playlistUrl,
+            tracks: playlistTracks,
+          },
+        ],
+      ]),
+    );
+    const { service, streamResolver, voiceGateway } = createService({
+      playlistCatalog,
+    });
+
+    const result = await service.playNow({
+      guildId: "guild-a",
+      source: playlistUrl,
+    });
+
+    expect(result.playlist?.trackCount).toBe(playlistTracks.length);
+    expect(result.startedPlayback).toBe(true);
+    expect(result.item.track.title).toBe("Track playlist-a");
+    expect(result.queue.current?.track.title).toBe("Track playlist-a");
+    expect(result.queue.upcoming.map((item) => item.track.title)).toEqual([
+      "Track playlist-b",
+      "Track playlist-c",
+    ]);
+    expect(streamResolver.resolveInputs).toEqual([playlistTracks[0]]);
+    expect(voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      "Track playlist-a",
+    ]);
+  });
+
+  it("queues every playlist item without interrupting current playback", async () => {
+    const playlistUrl =
+      "https://www.youtube.com/playlist?list=PL-orchestra-voice";
+    const playlistTracks = [
+      createTrack("playlist-a"),
+      createTrack("playlist-b"),
+    ];
+    const playlistCatalog = new FakePlaylistCatalog(
+      new Map([
+        [
+          playlistUrl,
+          {
+            title: "Study playlist",
+            sourceUrl: playlistUrl,
+            tracks: playlistTracks,
+          },
+        ],
+      ]),
+    );
+    const { service, streamResolver, voiceGateway } = createService({
+      playlistCatalog,
+    });
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("current") });
+    const result = await service.playNow({
+      guildId: "guild-a",
+      source: playlistUrl,
+    });
+
+    expect(result.startedPlayback).toBe(false);
+    expect(result.playlist?.trackCount).toBe(playlistTracks.length);
+    expect(result.queue.current?.track.title).toBe("Track current");
+    expect(result.queue.upcoming.map((item) => item.track.title)).toEqual([
+      "Track playlist-a",
+      "Track playlist-b",
+    ]);
+    expect(streamResolver.resolveInputs).toEqual([createTrack("current")]);
+    expect(voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      "Track current",
+    ]);
+  });
+
+  it("iterates every queued playlist item as playback finishes", async () => {
+    const playlistUrl =
+      "https://www.youtube.com/playlist?list=PL-orchestra-voice";
+    const playlistTracks = [
+      createTrack("playlist-a"),
+      createTrack("playlist-b"),
+      createTrack("playlist-c"),
+      createTrack("playlist-d"),
+    ];
+    const playlistCatalog = new FakePlaylistCatalog(
+      new Map([
+        [
+          playlistUrl,
+          {
+            title: "Study playlist",
+            sourceUrl: playlistUrl,
+            tracks: playlistTracks,
+          },
+        ],
+      ]),
+    );
+    const { service, voiceGateway } = createService({ playlistCatalog });
+    voiceGateway.onPlaybackFinished((guildId) =>
+      service.advanceAfterCurrent(guildId),
+    );
+
+    await service.playNow({
+      guildId: "guild-a",
+      source: playlistUrl,
+    });
+
+    for (const expectedTrack of playlistTracks.slice(1)) {
+      await voiceGateway.triggerPlaybackFinished("guild-a");
+      const queue = await service.getQueue("guild-a");
+
+      expect(queue.current?.track.title).toBe(expectedTrack.title);
+    }
+
+    const queue = await service.getQueue("guild-a");
+    expect(queue.upcoming).toHaveLength(0);
+    expect(voiceGateway.playCalls.map((call) => call.title)).toEqual(
+      playlistTracks.map((track) => track.title),
+    );
   });
 
   it("replays the current item when current-track loop is enabled", async () => {

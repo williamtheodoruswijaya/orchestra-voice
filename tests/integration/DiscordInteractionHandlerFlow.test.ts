@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { GuildPlaybackSettingsService } from "../../src/application/services/GuildPlaybackSettingsService";
 import { PlaybackQueueService } from "../../src/application/services/PlaybackQueueService";
-import type { MusicCatalogPort } from "../../src/application/ports/outbound/MusicCatalogPort";
+import type {
+  MusicCatalogPort,
+  PlaylistLookupResult,
+} from "../../src/application/ports/outbound/MusicCatalogPort";
 import type {
   AudioSourceDescriptor,
   ResolvedAudioSource,
@@ -45,8 +48,14 @@ interface SongFixture {
 }
 
 class EmptyMusicCatalog implements MusicCatalogPort {
+  constructor(private readonly playlists = new Map<string, PlaylistLookupResult>()) {}
+
   async search(): Promise<Track[]> {
     return [];
+  }
+
+  async getPlaylist(source: string): Promise<PlaylistLookupResult | undefined> {
+    return this.playlists.get(source);
   }
 }
 
@@ -245,9 +254,12 @@ class InteractionHarness {
   readonly guild: any;
   readonly member: any;
 
-  constructor(fixtures: SongFixture[]) {
+  constructor(
+    fixtures: SongFixture[],
+    options: { playlists?: Map<string, PlaylistLookupResult> } = {},
+  ) {
     const fixtureMap = new Map(fixtures.map((fixture) => [fixture.source, fixture]));
-    const catalog = new EmptyMusicCatalog();
+    const catalog = new EmptyMusicCatalog(options.playlists);
     const searchSessions = new InMemorySearchSessionRepository();
     const queueRepository = new InMemoryGuildQueueRepository();
     const settingsRepository = new InMemoryGuildPlaybackSettingsRepository();
@@ -261,6 +273,7 @@ class InteractionHarness {
       undefined,
       {
         relatedCatalog: catalog,
+        playlistCatalog: catalog,
         settingsRepository,
       },
     );
@@ -391,6 +404,19 @@ function buildSongFixtures(count: number): SongFixture[] {
     source: `https://www.youtube.com/watch?v=track-${index + 1}`,
     title: `Long Queue Song ${index + 1} ` + "x".repeat(60),
   }));
+}
+
+function trackFromFixture(fixture: SongFixture, index: number): Track {
+  const videoId = `playlist-track-${index + 1}`;
+
+  return {
+    id: `youtube:${videoId}`,
+    provider: "youtube",
+    providerTrackId: videoId,
+    title: fixture.title,
+    artist: "Playlist Channel",
+    pageUrl: fixture.source,
+  };
 }
 
 describe("Discord interaction handler integration", () => {
@@ -659,5 +685,57 @@ describe("Discord interaction handler integration", () => {
       ...Array.from({ length: 10 }, () => loopedSong.title),
       nextSong.title,
     ]);
+  });
+
+  it("plays every song from a YouTube playlist link through /play", async () => {
+    const playlistUrl =
+      "https://www.youtube.com/playlist?list=PL-orchestra-voice";
+    const playlistFixtures = buildSongFixtures(5);
+    const playlistTracks = playlistFixtures.map(trackFromFixture);
+    const harness = new InteractionHarness(playlistFixtures, {
+      playlists: new Map([
+        [
+          playlistUrl,
+          {
+            title: "Focus playlist",
+            sourceUrl: playlistUrl,
+            tracks: playlistTracks,
+          },
+        ],
+      ]),
+    });
+
+    await harness.sendJoin();
+
+    const playInteraction = await harness.sendPlay(playlistUrl);
+    const playPayload = getPayload(playInteraction);
+    let queue = await harness.getQueue();
+
+    expectPublicReply(playInteraction);
+    expect(playPayload.embeds[0].title).toBe("Playlist started");
+    expect(playPayload.embeds[0].description).toContain(playlistTracks[0].title);
+    expect(harness.voiceGateway.getCurrentTitle(harness.guildId)).toBe(
+      playlistTracks[0].title,
+    );
+    expect(queue.current?.track.title).toBe(playlistTracks[0].title);
+    expect(queue.upcoming.map((item) => item.track.title)).toEqual(
+      playlistTracks.slice(1).map((track) => track.title),
+    );
+
+    for (const expectedTrack of playlistTracks.slice(1)) {
+      await harness.voiceGateway.finishCurrentTrack(harness.guildId);
+      queue = await harness.getQueue();
+
+      expect(harness.voiceGateway.getCurrentTitle(harness.guildId)).toBe(
+        expectedTrack.title,
+      );
+      expect(queue.current?.track.title).toBe(expectedTrack.title);
+    }
+
+    expect(queue.upcoming).toHaveLength(0);
+    expect(harness.voiceGateway.playCalls.map((call) => call.title)).toEqual(
+      playlistTracks.map((track) => track.title),
+    );
+    expect(harness.streamResolver.resolveCalls).toEqual(playlistTracks);
   });
 });
