@@ -2,6 +2,15 @@ import type { Track } from "./Track";
 
 export type PlaybackStatus = "idle" | "playing" | "paused";
 
+function fisherYatesShuffle<T>(items: T[]): T[] {
+  const result = [...items];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
 export interface QueueItem {
   id: string;
   guildId: string;
@@ -182,6 +191,22 @@ export class GuildQueue {
       (item) => item.id !== removedItem.id,
     );
     return removedItem;
+  }
+
+  shuffleUpcoming(
+    shuffler: (items: QueueItem[]) => QueueItem[] = fisherYatesShuffle,
+  ): number {
+    if (this.upcomingItems.length <= 1) {
+      return 0;
+    }
+
+    this.upcomingItems = shuffler([...this.upcomingItems]);
+    this.queueLoopItems = [
+      ...(this.currentItem ? [this.currentItem] : []),
+      ...this.upcomingItems,
+    ];
+
+    return this.upcomingItems.length;
   }
 
   clearUpcoming(): number {

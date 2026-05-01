@@ -1005,4 +1005,54 @@ describe("PlaybackQueueService", () => {
     expect(repeatedIdle.autoplayStatus).toBe("not-needed");
     expect(relatedCatalog.searchCalls).toBe(1);
   });
+
+  it("shuffles the upcoming queue and saves state to the repository", async () => {
+    const { service, queueRepository } = createService();
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("b") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("c") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("d") });
+
+    const reverseShuffler = (items: import("../../src/domain/entities/GuildQueue").QueueItem[]) =>
+      [...items].reverse();
+    const result = await service.shuffleUpcoming("guild-a", reverseShuffler);
+
+    expect(result.shuffledCount).toBe(3);
+    expect(result.queue.upcoming.map((item) => item.track.title)).toEqual([
+      "Track d",
+      "Track c",
+      "Track b",
+    ]);
+    expect(result.queue.current?.track.title).toBe("Track a");
+
+    const persisted = await queueRepository.getByGuildId("guild-a");
+    expect(persisted.upcoming.map((item) => item.track.title)).toEqual([
+      "Track d",
+      "Track c",
+      "Track b",
+    ]);
+  });
+
+  it("shuffleUpcoming is a no-op when there are no upcoming items", async () => {
+    const { service } = createService();
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+
+    const result = await service.shuffleUpcoming("guild-a");
+
+    expect(result.shuffledCount).toBe(0);
+    expect(result.queue.current?.track.title).toBe("Track a");
+    expect(result.queue.upcoming).toHaveLength(0);
+  });
+
+  it("shuffleUpcoming is a no-op on an idle queue", async () => {
+    const { service } = createService();
+
+    const result = await service.shuffleUpcoming("guild-a");
+
+    expect(result.shuffledCount).toBe(0);
+    expect(result.queue.current).toBeUndefined();
+    expect(result.queue.upcoming).toHaveLength(0);
+  });
 });
