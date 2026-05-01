@@ -197,7 +197,7 @@ export class GuildQueue {
     shuffler: (items: QueueItem[]) => QueueItem[] = fisherYatesShuffle,
   ): number {
     if (this.upcomingItems.length <= 1) {
-      return this.upcomingItems.length;
+      return 0;
     }
 
     this.upcomingItems = shuffler([...this.upcomingItems]);

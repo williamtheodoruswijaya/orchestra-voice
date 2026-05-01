@@ -318,7 +318,7 @@ describe("GuildQueue shuffleUpcoming", () => {
     expect(queue.upcoming).toHaveLength(0);
   });
 
-  it("returns 1 and leaves a single upcoming item in place", () => {
+  it("returns 0 and leaves a single upcoming item in place", () => {
     const queue = new GuildQueue("guild-a");
     queue.enqueue(createQueueItem("a"));
     queue.startNext();
@@ -326,7 +326,7 @@ describe("GuildQueue shuffleUpcoming", () => {
 
     const count = queue.shuffleUpcoming();
 
-    expect(count).toBe(1);
+    expect(count).toBe(0);
     expect(queue.upcoming.map((item) => item.track.title)).toEqual(["Track b"]);
   });
 
