@@ -3,6 +3,7 @@ import { EnqueueTrack } from "../../src/application/use-cases/EnqueueTrack";
 import { GetNowPlaying } from "../../src/application/use-cases/GetNowPlaying";
 import { GetPlaybackSettings } from "../../src/application/use-cases/GetPlaybackSettings";
 import { LeaveVoiceChannel } from "../../src/application/use-cases/LeaveVoiceChannel";
+import { MoveQueueItem } from "../../src/application/use-cases/MoveQueueItem";
 import { PausePlayback } from "../../src/application/use-cases/PausePlayback";
 import { RemoveQueueItem } from "../../src/application/use-cases/RemoveQueueItem";
 import { ResumePlayback } from "../../src/application/use-cases/ResumePlayback";
@@ -81,6 +82,24 @@ describe("application use cases", () => {
       "remove:2",
       "stop",
     ]);
+  });
+
+  it("delegates move to the playback service", async () => {
+    const calls: string[] = [];
+    const playbackService = {
+      moveUpcoming: async (_guildId: string, from: number, to: number) => {
+        calls.push(`move:${from}→${to}`);
+        return { movedItem: { track: createTrack("moved") }, queue: {} };
+      },
+    } as unknown as PlaybackQueueService;
+
+    await new MoveQueueItem(playbackService).execute({
+      guildId: "guild-a",
+      from: 3,
+      to: 1,
+    });
+
+    expect(calls).toEqual(["move:3→1"]);
   });
 
   it("delegates settings wrappers to the settings service", async () => {

@@ -179,6 +179,25 @@ async function main(): Promise<void> {
       .setName("shuffle")
       .setDescription("Shuffle the upcoming tracks in the queue")
       .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("move")
+      .setDescription("Move an upcoming track to a different queue position")
+      .addIntegerOption((option) =>
+        option
+          .setName("from")
+          .setDescription("Current position of the track to move")
+          .setRequired(true)
+          .setMinValue(1),
+      )
+      .addIntegerOption((option) =>
+        option
+          .setName("to")
+          .setDescription("Destination position for the track")
+          .setRequired(true)
+          .setMinValue(1),
+      )
+      .toJSON(),
   ];
 
   const rest = new REST({ version: "10" }).setToken(runtimeEnv.discordToken);

@@ -193,6 +193,34 @@ export class GuildQueue {
     return removedItem;
   }
 
+  moveUpcoming(from: number, to: number): QueueItem {
+    if (!Number.isInteger(from) || from < 1) {
+      throw new Error("Queue position must be 1 or higher.");
+    }
+    if (!Number.isInteger(to) || to < 1) {
+      throw new Error("Queue position must be 1 or higher.");
+    }
+    if (from > this.upcomingItems.length) {
+      throw new Error(
+        `Queue position must be between 1 and ${this.upcomingItems.length}.`,
+      );
+    }
+    if (to > this.upcomingItems.length) {
+      throw new Error(
+        `Queue position must be between 1 and ${this.upcomingItems.length}.`,
+      );
+    }
+
+    const [movedItem] = this.upcomingItems.splice(from - 1, 1);
+    this.upcomingItems.splice(to - 1, 0, movedItem);
+    this.queueLoopItems = [
+      ...(this.currentItem ? [this.currentItem] : []),
+      ...this.upcomingItems,
+    ];
+
+    return movedItem;
+  }
+
   shuffleUpcoming(
     shuffler: (items: QueueItem[]) => QueueItem[] = fisherYatesShuffle,
   ): number {

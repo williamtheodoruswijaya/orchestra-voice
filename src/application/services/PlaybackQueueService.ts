@@ -91,6 +91,10 @@ export interface RemoveQueueItemResult extends QueueMutationResult {
   removedItem: QueueItem;
 }
 
+export interface MoveQueueItemResult extends QueueMutationResult {
+  movedItem: QueueItem;
+}
+
 export interface ClearQueueResult extends QueueMutationResult {
   removedCount: number;
 }
@@ -449,6 +453,21 @@ export class PlaybackQueueService {
 
     return {
       removedItem,
+      queue: queue.toState(),
+    };
+  }
+
+  async moveUpcoming(
+    guildId: string,
+    from: number,
+    to: number,
+  ): Promise<MoveQueueItemResult> {
+    const queue = await this.queueRepository.getByGuildId(guildId);
+    const movedItem = queue.moveUpcoming(from, to);
+    await this.queueRepository.save(queue);
+
+    return {
+      movedItem,
       queue: queue.toState(),
     };
   }

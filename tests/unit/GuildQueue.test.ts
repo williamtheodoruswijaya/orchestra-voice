@@ -308,6 +308,137 @@ describe("GuildQueue queue loop", () => {
   });
 });
 
+describe("GuildQueue moveUpcoming", () => {
+  it("moves an item forward in the queue (lower position)", () => {
+    const queue = new GuildQueue("guild-a");
+    queue.enqueue(createQueueItem("a"));
+    queue.enqueue(createQueueItem("b"));
+    queue.enqueue(createQueueItem("c"));
+    queue.enqueue(createQueueItem("d"));
+    queue.startNext();
+
+    queue.moveUpcoming(3, 1);
+
+    expect(queue.upcoming.map((i) => i.track.title)).toEqual([
+      "Track d",
+      "Track b",
+      "Track c",
+    ]);
+  });
+
+  it("moves an item backward in the queue (higher position)", () => {
+    const queue = new GuildQueue("guild-a");
+    queue.enqueue(createQueueItem("a"));
+    queue.enqueue(createQueueItem("b"));
+    queue.enqueue(createQueueItem("c"));
+    queue.enqueue(createQueueItem("d"));
+    queue.startNext();
+
+    queue.moveUpcoming(1, 3);
+
+    expect(queue.upcoming.map((i) => i.track.title)).toEqual([
+      "Track c",
+      "Track d",
+      "Track b",
+    ]);
+  });
+
+  it("is a no-op when from and to are the same position", () => {
+    const queue = new GuildQueue("guild-a");
+    queue.enqueue(createQueueItem("a"));
+    queue.enqueue(createQueueItem("b"));
+    queue.enqueue(createQueueItem("c"));
+    queue.startNext();
+
+    queue.moveUpcoming(2, 2);
+
+    expect(queue.upcoming.map((i) => i.track.title)).toEqual([
+      "Track b",
+      "Track c",
+    ]);
+  });
+
+  it("rejects positions below 1", () => {
+    const queue = new GuildQueue("guild-a");
+    queue.enqueue(createQueueItem("a"));
+    queue.enqueue(createQueueItem("b"));
+    queue.startNext();
+
+    expect(() => queue.moveUpcoming(0, 1)).toThrow(
+      "Queue position must be 1 or higher.",
+    );
+    expect(() => queue.moveUpcoming(1, 0)).toThrow(
+      "Queue position must be 1 or higher.",
+    );
+  });
+
+  it("rejects positions beyond the upcoming list length", () => {
+    const queue = new GuildQueue("guild-a");
+    queue.enqueue(createQueueItem("a"));
+    queue.enqueue(createQueueItem("b"));
+    queue.startNext();
+
+    expect(() => queue.moveUpcoming(3, 1)).toThrow(
+      "Queue position must be between 1 and 1.",
+    );
+    expect(() => queue.moveUpcoming(1, 3)).toThrow(
+      "Queue position must be between 1 and 1.",
+    );
+  });
+
+  it("preserves all items — none lost or duplicated after move", () => {
+    const queue = new GuildQueue("guild-a");
+    queue.enqueue(createQueueItem("a"));
+    queue.enqueue(createQueueItem("b"));
+    queue.enqueue(createQueueItem("c"));
+    queue.enqueue(createQueueItem("d"));
+    queue.enqueue(createQueueItem("e"));
+    queue.startNext();
+
+    queue.moveUpcoming(4, 1);
+
+    const titles = queue.upcoming.map((i) => i.track.title);
+    expect(titles).toHaveLength(4);
+    expect(new Set(titles)).toEqual(
+      new Set(["Track b", "Track c", "Track d", "Track e"]),
+    );
+  });
+
+  it("does not affect the currently playing item", () => {
+    const queue = new GuildQueue("guild-a");
+    queue.enqueue(createQueueItem("a"));
+    queue.enqueue(createQueueItem("b"));
+    queue.enqueue(createQueueItem("c"));
+    queue.startNext();
+
+    queue.moveUpcoming(2, 1);
+
+    expect(queue.current?.track.title).toBe("Track a");
+  });
+
+  it("updates queueLoopItems so queue-loop replays in the moved order", () => {
+    const queue = new GuildQueue("guild-a");
+    queue.enqueue(createQueueItem("a"));
+    queue.enqueue(createQueueItem("b"));
+    queue.enqueue(createQueueItem("c"));
+    queue.startNext();
+    queue.toggleQueueLoop();
+
+    queue.moveUpcoming(2, 1);
+
+    // Advance: c, b should come after current wraps back to a
+    queue.advance(); // c (moved to position 1)
+    queue.advance(); // b
+    const wrapped = queue.advance(); // wraps → a
+
+    expect(wrapped?.track.title).toBe("Track a");
+    expect(queue.upcoming.map((i) => i.track.title)).toEqual([
+      "Track c",
+      "Track b",
+    ]);
+  });
+});
+
 describe("GuildQueue shuffleUpcoming", () => {
   it("returns 0 and keeps the queue unchanged when there are no upcoming items", () => {
     const queue = new GuildQueue("guild-a");

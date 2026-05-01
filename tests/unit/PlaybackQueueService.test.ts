@@ -1056,3 +1056,60 @@ describe("PlaybackQueueService", () => {
     expect(result.queue.upcoming).toHaveLength(0);
   });
 });
+
+describe("PlaybackQueueService moveUpcoming", () => {
+  it("moves an upcoming item from one position to another", async () => {
+    const { service } = createService();
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("b") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("c") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("d") });
+
+    const result = await service.moveUpcoming("guild-a", 3, 1);
+
+    expect(result.movedItem.track.title).toBe("Track d");
+    expect(result.queue.upcoming.map((i) => i.track.title)).toEqual([
+      "Track d",
+      "Track b",
+      "Track c",
+    ]);
+  });
+
+  it("returns the moved item and the updated queue", async () => {
+    const { service } = createService();
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("b") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("c") });
+
+    const result = await service.moveUpcoming("guild-a", 1, 2);
+
+    expect(result.movedItem.track.title).toBe("Track b");
+    expect(result.queue.upcoming.map((i) => i.track.title)).toEqual([
+      "Track c",
+      "Track b",
+    ]);
+  });
+
+  it("rejects an invalid from position", async () => {
+    const { service } = createService();
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+
+    await expect(service.moveUpcoming("guild-a", 0, 1)).rejects.toThrow(
+      "Queue position must be 1 or higher.",
+    );
+  });
+
+  it("rejects an out-of-range to position", async () => {
+    const { service } = createService();
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("b") });
+
+    await expect(service.moveUpcoming("guild-a", 1, 5)).rejects.toThrow(
+      "Queue position must be between 1 and 1.",
+    );
+  });
+});

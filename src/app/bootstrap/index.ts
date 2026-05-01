@@ -15,6 +15,7 @@ import { PickTrack } from "../../application/use-cases/PickTrack";
 import { PlayNextTrack } from "../../application/use-cases/PlayNextTrack";
 import { PlayNowTrack } from "../../application/use-cases/PlayNowTrack";
 import { RemoveQueueItem } from "../../application/use-cases/RemoveQueueItem";
+import { MoveQueueItem } from "../../application/use-cases/MoveQueueItem";
 import { ResumePlayback } from "../../application/use-cases/ResumePlayback";
 import { SaveSearchResults } from "../../application/use-cases/SaveSearchResults";
 import { SearchTracks } from "../../application/use-cases/SearchTracks";
@@ -134,6 +135,7 @@ async function main(): Promise<void> {
     skipTrack: new SkipTrack(playbackQueueService),
     clearQueue: new ClearQueue(playbackQueueService),
     removeQueueItem: new RemoveQueueItem(playbackQueueService),
+    moveQueueItem: new MoveQueueItem(playbackQueueService),
     stopPlayback: new StopPlayback(playbackQueueService),
     pausePlayback: new PausePlayback(playbackQueueService),
     resumePlayback: new ResumePlayback(playbackQueueService),

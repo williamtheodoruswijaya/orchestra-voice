@@ -20,6 +20,7 @@ import type { LoopQueue } from "../../application/use-cases/LoopQueue";
 import type { SkipTrack } from "../../application/use-cases/SkipTrack";
 import type { ClearQueue } from "../../application/use-cases/ClearQueue";
 import type { RemoveQueueItem } from "../../application/use-cases/RemoveQueueItem";
+import type { MoveQueueItem } from "../../application/use-cases/MoveQueueItem";
 import type { StopPlayback } from "../../application/use-cases/StopPlayback";
 import type { PausePlayback } from "../../application/use-cases/PausePlayback";
 import type { ResumePlayback } from "../../application/use-cases/ResumePlayback";
@@ -56,6 +57,7 @@ interface DiscordInteractionHandlerDependencies {
   skipTrack: SkipTrack;
   clearQueue: ClearQueue;
   removeQueueItem: RemoveQueueItem;
+  moveQueueItem: MoveQueueItem;
   stopPlayback: StopPlayback;
   pausePlayback: PausePlayback;
   resumePlayback: ResumePlayback;
@@ -147,6 +149,9 @@ export class DiscordInteractionHandler {
           return;
         case "shuffle":
           await this.handleShuffle(interaction);
+          return;
+        case "move":
+          await this.handleMove(interaction);
           return;
       }
     } catch (error) {
@@ -723,6 +728,29 @@ export class DiscordInteractionHandler {
       embeds: [
         this.baseEmbed("Queue shuffled").setDescription(
           `Shuffled ${result.shuffledCount} upcoming track(s).`,
+        ),
+      ],
+    });
+  }
+
+  private async handleMove(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    if (!(await this.ensureSameVoiceChannel(interaction))) return;
+
+    const from = interaction.options.getInteger("from", true);
+    const to = interaction.options.getInteger("to", true);
+
+    const result = await this.dependencies.moveQueueItem.execute({
+      guildId: interaction.guildId!,
+      from,
+      to,
+    });
+
+    await interaction.editReply({
+      embeds: [
+        this.baseEmbed("Queue item moved").setDescription(
+          `Moved **${result.movedItem.track.title}** from position ${from} to position ${to}.`,
         ),
       ],
     });
