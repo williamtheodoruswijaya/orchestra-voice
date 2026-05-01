@@ -307,3 +307,110 @@ describe("GuildQueue queue loop", () => {
     );
   });
 });
+
+describe("GuildQueue shuffleUpcoming", () => {
+  it("returns 0 and keeps the queue unchanged when there are no upcoming items", () => {
+    const queue = new GuildQueue("guild-a");
+
+    const count = queue.shuffleUpcoming();
+
+    expect(count).toBe(0);
+    expect(queue.upcoming).toHaveLength(0);
+  });
+
+  it("returns 1 and leaves a single upcoming item in place", () => {
+    const queue = new GuildQueue("guild-a");
+    queue.enqueue(createQueueItem("a"));
+    queue.startNext();
+    queue.enqueue(createQueueItem("b"));
+
+    const count = queue.shuffleUpcoming();
+
+    expect(count).toBe(1);
+    expect(queue.upcoming.map((item) => item.track.title)).toEqual(["Track b"]);
+  });
+
+  it("applies the provided shuffler function to the upcoming items", () => {
+    const queue = new GuildQueue("guild-a");
+    queue.enqueue(createQueueItem("a"));
+    queue.enqueue(createQueueItem("b"));
+    queue.enqueue(createQueueItem("c"));
+    queue.startNext();
+
+    const reverseShuffler = (items: QueueItem[]) => [...items].reverse();
+    const count = queue.shuffleUpcoming(reverseShuffler);
+
+    expect(count).toBe(2);
+    expect(queue.upcoming.map((item) => item.track.title)).toEqual([
+      "Track c",
+      "Track b",
+    ]);
+  });
+
+  it("preserves all items — no item is lost or duplicated after shuffle", () => {
+    const queue = new GuildQueue("guild-a");
+    queue.enqueue(createQueueItem("a"));
+    queue.enqueue(createQueueItem("b"));
+    queue.enqueue(createQueueItem("c"));
+    queue.enqueue(createQueueItem("d"));
+    queue.startNext();
+
+    queue.shuffleUpcoming();
+
+    const titles = new Set(queue.upcoming.map((item) => item.track.title));
+    expect(titles).toEqual(
+      new Set(["Track b", "Track c", "Track d"]),
+    );
+    expect(queue.upcoming).toHaveLength(3);
+  });
+
+  it("does not affect the currently playing item", () => {
+    const queue = new GuildQueue("guild-a");
+    queue.enqueue(createQueueItem("a"));
+    queue.enqueue(createQueueItem("b"));
+    queue.enqueue(createQueueItem("c"));
+    queue.startNext();
+
+    queue.shuffleUpcoming();
+
+    expect(queue.current?.track.title).toBe("Track a");
+  });
+
+  it("updates queueLoopItems so queue-loop replays in shuffled order", () => {
+    const queue = new GuildQueue("guild-a");
+    queue.enqueue(createQueueItem("a"));
+    queue.enqueue(createQueueItem("b"));
+    queue.enqueue(createQueueItem("c"));
+    queue.startNext();
+    queue.toggleQueueLoop();
+
+    const reverseShuffler = (items: QueueItem[]) => [...items].reverse();
+    queue.shuffleUpcoming(reverseShuffler);
+
+    // advance through b, c (reversed), then loop should restart with a, c, b
+    queue.advance(); // plays c (reversed first)
+    queue.advance(); // plays b (reversed second)
+    const wrappedItem = queue.advance(); // wraps → a
+
+    expect(wrappedItem?.track.title).toBe("Track a");
+    expect(queue.upcoming.map((item) => item.track.title)).toEqual([
+      "Track c",
+      "Track b",
+    ]);
+  });
+
+  it("shuffleUpcoming on a queue with no current item shuffles all items", () => {
+    const queue = new GuildQueue("guild-a");
+    queue.enqueue(createQueueItem("x"));
+    queue.enqueue(createQueueItem("y"));
+
+    const reverseShuffler = (items: QueueItem[]) => [...items].reverse();
+    const count = queue.shuffleUpcoming(reverseShuffler);
+
+    expect(count).toBe(2);
+    expect(queue.upcoming.map((item) => item.track.title)).toEqual([
+      "Track y",
+      "Track x",
+    ]);
+  });
+});

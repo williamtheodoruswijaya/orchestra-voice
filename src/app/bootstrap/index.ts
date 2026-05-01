@@ -20,6 +20,7 @@ import { SaveSearchResults } from "../../application/use-cases/SaveSearchResults
 import { SearchTracks } from "../../application/use-cases/SearchTracks";
 import { SetAutoplayMode } from "../../application/use-cases/SetAutoplayMode";
 import { SetPlaybackMood } from "../../application/use-cases/SetPlaybackMood";
+import { ShuffleQueue } from "../../application/use-cases/ShuffleQueue";
 import { SkipTrack } from "../../application/use-cases/SkipTrack";
 import { StopPlayback } from "../../application/use-cases/StopPlayback";
 import { GuildPlaybackSettingsService } from "../../application/services/GuildPlaybackSettingsService";
@@ -139,6 +140,7 @@ async function main(): Promise<void> {
     getPlaybackSettings: new GetPlaybackSettings(settingsService),
     setAutoplayMode: new SetAutoplayMode(settingsService),
     setPlaybackMood: new SetPlaybackMood(settingsService),
+    shuffleQueue: new ShuffleQueue(playbackQueueService),
   });
 
   client.once(Events.ClientReady, (readyClient) => {

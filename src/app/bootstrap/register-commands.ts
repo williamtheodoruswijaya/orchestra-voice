@@ -174,6 +174,11 @@ async function main(): Promise<void> {
           ),
       )
       .toJSON(),
+
+    new SlashCommandBuilder()
+      .setName("shuffle")
+      .setDescription("Shuffle the upcoming tracks in the queue")
+      .toJSON(),
   ];
 
   const rest = new REST({ version: "10" }).setToken(runtimeEnv.discordToken);

@@ -95,6 +95,10 @@ export interface ClearQueueResult extends QueueMutationResult {
   removedCount: number;
 }
 
+export interface ShuffleQueueResult extends QueueMutationResult {
+  shuffledCount: number;
+}
+
 type IdGenerator = () => string;
 type Clock = () => number;
 
@@ -417,6 +421,20 @@ export class PlaybackQueueService {
 
     return {
       removedCount,
+      queue: queue.toState(),
+    };
+  }
+
+  async shuffleUpcoming(
+    guildId: string,
+    shuffler?: (items: QueueItem[]) => QueueItem[],
+  ): Promise<ShuffleQueueResult> {
+    const queue = await this.queueRepository.getByGuildId(guildId);
+    const shuffledCount = queue.shuffleUpcoming(shuffler);
+    await this.queueRepository.save(queue);
+
+    return {
+      shuffledCount,
       queue: queue.toState(),
     };
   }

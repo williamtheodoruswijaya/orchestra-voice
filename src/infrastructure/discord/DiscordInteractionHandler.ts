@@ -25,6 +25,7 @@ import type { PausePlayback } from "../../application/use-cases/PausePlayback";
 import type { ResumePlayback } from "../../application/use-cases/ResumePlayback";
 import type { SetAutoplayMode } from "../../application/use-cases/SetAutoplayMode";
 import type { SetPlaybackMood } from "../../application/use-cases/SetPlaybackMood";
+import type { ShuffleQueue } from "../../application/use-cases/ShuffleQueue";
 import type { SearchProvider } from "../../application/ports/outbound/SearchSessionRepositoryPort";
 import type { ProviderSearchStatus } from "../../application/ports/outbound/MusicCatalogPort";
 import type {
@@ -61,6 +62,7 @@ interface DiscordInteractionHandlerDependencies {
   getPlaybackSettings: GetPlaybackSettings;
   setAutoplayMode: SetAutoplayMode;
   setPlaybackMood: SetPlaybackMood;
+  shuffleQueue: ShuffleQueue;
 }
 
 export class DiscordInteractionHandler {
@@ -142,6 +144,9 @@ export class DiscordInteractionHandler {
           return;
         case "selected":
           await this.handleSelected(interaction);
+          return;
+        case "shuffle":
+          await this.handleShuffle(interaction);
           return;
       }
     } catch (error) {
@@ -690,6 +695,35 @@ export class DiscordInteractionHandler {
             value: this.describePlaybackPath(selectedTrack),
             inline: false,
           }),
+      ],
+    });
+  }
+
+  private async handleShuffle(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    if (!(await this.ensureSameVoiceChannel(interaction))) return;
+
+    const result = await this.dependencies.shuffleQueue.execute(
+      interaction.guildId!,
+    );
+
+    if (result.shuffledCount === 0) {
+      await interaction.editReply({
+        embeds: [
+          this.baseEmbed("Nothing to shuffle").setDescription(
+            "There are no upcoming tracks in the queue to shuffle.",
+          ),
+        ],
+      });
+      return;
+    }
+
+    await interaction.editReply({
+      embeds: [
+        this.baseEmbed("Queue shuffled").setDescription(
+          `Shuffled ${result.shuffledCount} upcoming track(s).`,
+        ),
       ],
     });
   }
