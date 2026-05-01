@@ -57,4 +57,42 @@ describe("TrackSimilarityScorer", () => {
     expect(focusBest.track.title).toBe("Ocean Ambient Study");
     expect(upbeatBest.track.title).toBe("Ocean Dance Remix");
   });
+
+  it("filters identical tracks and handles sparse metadata", () => {
+    const scorer = new TrackSimilarityScorer();
+    const reference: Track = {
+      id: "a",
+      provider: "youtube",
+      providerTrackId: "a",
+      title: "",
+    };
+    const sameTrack = track("a", "Anything", "Someone");
+    const sparseCandidate: Track = {
+      id: "b",
+      provider: "youtube",
+      providerTrackId: "b",
+      title: "",
+    };
+
+    expect(scorer.score(reference, sameTrack, "balanced")).toBe(0);
+    expect(scorer.score(reference, sparseCandidate, "chill")).toBe(0.05);
+    expect(
+      scorer.rank(reference, [sameTrack, sparseCandidate], "balanced"),
+    ).toHaveLength(1);
+  });
+
+  it("scores partial and token-overlap artist matches below exact matches", () => {
+    const scorer = new TrackSimilarityScorer();
+    const reference = track("a", "Night Drive", "The Midnight");
+    const partialArtist = track("b", "Night Drive", "Midnight");
+    const overlappingArtist = track("c", "Night Drive", "Midnight Kids");
+    const exactArtist = track("d", "Night Drive", "The Midnight");
+
+    const partialScore = scorer.score(reference, partialArtist, "balanced");
+    const overlapScore = scorer.score(reference, overlappingArtist, "balanced");
+    const exactScore = scorer.score(reference, exactArtist, "balanced");
+
+    expect(partialScore).toBeGreaterThan(overlapScore);
+    expect(exactScore).toBeGreaterThan(partialScore);
+  });
 });

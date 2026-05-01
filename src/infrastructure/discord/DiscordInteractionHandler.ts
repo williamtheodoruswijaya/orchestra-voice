@@ -16,6 +16,7 @@ import type { EnqueueTrack } from "../../application/use-cases/EnqueueTrack";
 import type { GetQueue } from "../../application/use-cases/GetQueue";
 import type { GetPlaybackSettings } from "../../application/use-cases/GetPlaybackSettings";
 import type { LoopCurrentTrack } from "../../application/use-cases/LoopCurrentTrack";
+import type { LoopQueue } from "../../application/use-cases/LoopQueue";
 import type { SkipTrack } from "../../application/use-cases/SkipTrack";
 import type { ClearQueue } from "../../application/use-cases/ClearQueue";
 import type { RemoveQueueItem } from "../../application/use-cases/RemoveQueueItem";
@@ -50,6 +51,7 @@ interface DiscordInteractionHandlerDependencies {
   enqueueTrack: EnqueueTrack;
   getQueue: GetQueue;
   loopCurrentTrack: LoopCurrentTrack;
+  loopQueue: LoopQueue;
   skipTrack: SkipTrack;
   clearQueue: ClearQueue;
   removeQueueItem: RemoveQueueItem;
@@ -360,6 +362,12 @@ export class DiscordInteractionHandler {
   ): Promise<void> {
     if (!(await this.ensureSameVoiceChannel(interaction))) return;
 
+    const scope = interaction.options.getString("scope") ?? "track";
+    if (scope === "queue") {
+      await this.handleQueueLoop(interaction);
+      return;
+    }
+
     const result = await this.dependencies.loopCurrentTrack.execute(
       interaction.guildId!,
     );
@@ -375,6 +383,42 @@ export class DiscordInteractionHandler {
               : "This track will finish normally and then continue to the next queued item.",
             inline: false,
           }),
+      ],
+    });
+  }
+
+  private async handleQueueLoop(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    let result;
+    try {
+      result = await this.dependencies.loopQueue.execute(interaction.guildId!);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === "The queue is empty. Add tracks with /play first."
+      ) {
+        await interaction.editReply({
+          embeds: [
+            this.baseEmbed("Cannot Enable Queue Loop").setDescription(
+              "The queue is empty. Add tracks with /play first.",
+            ),
+          ],
+        });
+        return;
+      }
+
+      throw error;
+    }
+
+    await interaction.editReply({
+      embeds: [
+        this.baseEmbed(result.queueLoop ? "Queue Loop ON" : "Queue Loop OFF")
+          .setDescription(
+            result.queueLoop
+              ? "The queue will restart from track 1 when it ends.\nUse `/loop queue` again to turn it off."
+              : "The queue will stop when the last track finishes.",
+          ),
       ],
     });
   }

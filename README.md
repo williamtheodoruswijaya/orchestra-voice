@@ -97,6 +97,7 @@ For production-like hosting, use `npm run build` followed by `npm start` instead
 - `/queue` shows the current and upcoming queue state, with up to 20 upcoming items rendered safely across multiple embed fields.
 - `/nowplaying` shows the current track.
 - `/loop` toggles repeat for the current track. While enabled, the current track replays when it finishes and upcoming tracks keep waiting.
+- `/loop scope:queue` toggles queue loop. While enabled, the queue restarts from track 1 after the last track finishes. `/clearqueue` turns queue loop off; `/stop` does not.
 - `/skip` skips the current track.
 - `/clearqueue` clears upcoming tracks without stopping the current track.
 - `/remove position:<n>` removes an upcoming queued track.

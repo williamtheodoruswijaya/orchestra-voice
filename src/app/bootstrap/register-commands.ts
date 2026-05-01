@@ -96,7 +96,17 @@ async function main(): Promise<void> {
 
     new SlashCommandBuilder()
       .setName("loop")
-      .setDescription("Toggle repeat for the current track")
+      .setDescription("Toggle repeat for the current track or queue")
+      .addStringOption((option) =>
+        option
+          .setName("scope")
+          .setDescription("What should loop")
+          .setRequired(false)
+          .addChoices(
+            { name: "Current track", value: "track" },
+            { name: "Queue", value: "queue" },
+          ),
+      )
       .toJSON(),
 
     new SlashCommandBuilder()

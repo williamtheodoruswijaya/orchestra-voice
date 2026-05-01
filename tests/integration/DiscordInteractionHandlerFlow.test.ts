@@ -24,6 +24,7 @@ import { GetSelectedTrack } from "../../src/application/use-cases/GetSelectedTra
 import { JoinVoiceChannel } from "../../src/application/use-cases/JoinVoiceChannel";
 import { LeaveVoiceChannel } from "../../src/application/use-cases/LeaveVoiceChannel";
 import { LoopCurrentTrack } from "../../src/application/use-cases/LoopCurrentTrack";
+import { LoopQueue } from "../../src/application/use-cases/LoopQueue";
 import { PausePlayback } from "../../src/application/use-cases/PausePlayback";
 import { PickTrack } from "../../src/application/use-cases/PickTrack";
 import { PlayNextTrack } from "../../src/application/use-cases/PlayNextTrack";
@@ -48,9 +49,12 @@ interface SongFixture {
 }
 
 class EmptyMusicCatalog implements MusicCatalogPort {
+  searchCalls = 0;
+
   constructor(private readonly playlists = new Map<string, PlaylistLookupResult>()) {}
 
   async search(): Promise<Track[]> {
+    this.searchCalls += 1;
     return [];
   }
 
@@ -251,6 +255,7 @@ class InteractionHarness {
   readonly streamResolver: ScenarioStreamResolver;
   readonly playbackQueueService: PlaybackQueueService;
   readonly handler: DiscordInteractionHandler;
+  readonly catalog: EmptyMusicCatalog;
   readonly guild: any;
   readonly member: any;
 
@@ -260,6 +265,7 @@ class InteractionHarness {
   ) {
     const fixtureMap = new Map(fixtures.map((fixture) => [fixture.source, fixture]));
     const catalog = new EmptyMusicCatalog(options.playlists);
+    this.catalog = catalog;
     const searchSessions = new InMemorySearchSessionRepository();
     const queueRepository = new InMemoryGuildQueueRepository();
     const settingsRepository = new InMemoryGuildPlaybackSettingsRepository();
@@ -299,6 +305,7 @@ class InteractionHarness {
       enqueueTrack: new EnqueueTrack(this.playbackQueueService),
       getQueue: new GetQueue(this.playbackQueueService),
       loopCurrentTrack: new LoopCurrentTrack(this.playbackQueueService),
+      loopQueue: new LoopQueue(this.playbackQueueService),
       skipTrack: new SkipTrack(this.playbackQueueService),
       clearQueue: new ClearQueue(this.playbackQueueService),
       removeQueueItem: new RemoveQueueItem(this.playbackQueueService),
@@ -351,8 +358,20 @@ class InteractionHarness {
     return this.sendCommand("loop");
   }
 
+  async sendLoopQueue(): Promise<FakeChatInputInteraction> {
+    return this.sendCommand("loop", { scope: "queue" });
+  }
+
   async sendQueue(): Promise<FakeChatInputInteraction> {
     return this.sendCommand("queue");
+  }
+
+  async sendClearQueue(): Promise<FakeChatInputInteraction> {
+    return this.sendCommand("clearqueue");
+  }
+
+  async sendAutoplayRelated(): Promise<FakeChatInputInteraction> {
+    return this.sendCommand("autoplay", { mode: "related" });
   }
 
   async getQueue() {
@@ -420,6 +439,187 @@ function trackFromFixture(fixture: SongFixture, index: number): Track {
 }
 
 describe("Discord interaction handler integration", () => {
+  it("drains a three-track /play queue to idle when queue-loop is off", async () => {
+    const [firstSong, secondSong, thirdSong] = buildSongFixtures(3);
+    const harness = new InteractionHarness([firstSong, secondSong, thirdSong]);
+
+    await harness.sendJoin();
+    await harness.sendPlay(firstSong.source);
+    await harness.sendPlay(secondSong.source);
+    await harness.sendPlay(thirdSong.source);
+
+    await harness.voiceGateway.finishCurrentTrack(harness.guildId);
+    await harness.voiceGateway.finishCurrentTrack(harness.guildId);
+    await harness.voiceGateway.finishCurrentTrack(harness.guildId);
+
+    const queue = await harness.getQueue();
+    expect(queue.current).toBeUndefined();
+    expect(queue.upcoming).toHaveLength(0);
+    expect(queue.status).toBe("idle");
+    expect(harness.voiceGateway.getCurrentTitle(harness.guildId)).toBeUndefined();
+    expect(harness.voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      firstSong.title,
+      secondSong.title,
+      thirdSong.title,
+    ]);
+  });
+
+  it("restarts from the first track after /loop queue when the last track ends", async () => {
+    const [firstSong, secondSong, thirdSong] = buildSongFixtures(3);
+    const harness = new InteractionHarness([firstSong, secondSong, thirdSong]);
+
+    await harness.sendJoin();
+    await harness.sendPlay(firstSong.source);
+    await harness.sendPlay(secondSong.source);
+    await harness.sendPlay(thirdSong.source);
+
+    const loopInteraction = await harness.sendLoopQueue();
+    const loopPayload = getPayload(loopInteraction);
+
+    expectPublicReply(loopInteraction);
+    expect(loopPayload.embeds[0].title).toBe("Queue Loop ON");
+
+    await harness.voiceGateway.finishCurrentTrack(harness.guildId);
+    await harness.voiceGateway.finishCurrentTrack(harness.guildId);
+    await harness.voiceGateway.finishCurrentTrack(harness.guildId);
+
+    const queue = await harness.getQueue();
+    expect(queue.queueLoop).toBe(true);
+    expect(queue.current?.track.title).toBe(firstSong.title);
+    expect(queue.upcoming.map((item) => item.track.title)).toEqual([
+      secondSong.title,
+      thirdSong.title,
+    ]);
+    expect(harness.voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      firstSong.title,
+      secondSong.title,
+      thirdSong.title,
+      firstSong.title,
+    ]);
+  });
+
+  it("wraps to the first track when /skip is used on the last item with queue-loop on", async () => {
+    const [firstSong, secondSong, thirdSong] = buildSongFixtures(3);
+    const harness = new InteractionHarness([firstSong, secondSong, thirdSong]);
+
+    await harness.sendJoin();
+    await harness.sendPlay(firstSong.source);
+    await harness.sendPlay(secondSong.source);
+    await harness.sendPlay(thirdSong.source);
+    await harness.sendLoopQueue();
+    await harness.voiceGateway.finishCurrentTrack(harness.guildId);
+    await harness.voiceGateway.finishCurrentTrack(harness.guildId);
+
+    const skipInteraction = await harness.sendSkip();
+    const skipPayload = getPayload(skipInteraction);
+    const queue = await harness.getQueue();
+
+    expectPublicReply(skipInteraction);
+    expect(skipPayload.embeds[0].title).toBe("Skipped");
+    expect(skipPayload.embeds[0].description).toContain(firstSong.title);
+    expect(queue.current?.track.title).toBe(firstSong.title);
+    expect(queue.upcoming.map((item) => item.track.title)).toEqual([
+      secondSong.title,
+      thirdSong.title,
+    ]);
+    expect(harness.voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      firstSong.title,
+      secondSong.title,
+      thirdSong.title,
+      firstSong.title,
+    ]);
+  });
+
+  it("turns queue-loop off when /clearqueue clears upcoming items", async () => {
+    const [firstSong, secondSong, thirdSong] = buildSongFixtures(3);
+    const harness = new InteractionHarness([firstSong, secondSong, thirdSong]);
+
+    await harness.sendJoin();
+    await harness.sendPlay(firstSong.source);
+    await harness.sendPlay(secondSong.source);
+    await harness.sendPlay(thirdSong.source);
+    await harness.sendLoopQueue();
+
+    const clearInteraction = await harness.sendClearQueue();
+    const queue = await harness.getQueue();
+
+    expectPublicReply(clearInteraction);
+    expect(queue.current?.track.title).toBe(firstSong.title);
+    expect(queue.upcoming).toHaveLength(0);
+    expect(queue.queueLoop).toBe(false);
+  });
+
+  it("shows an error embed when /loop queue is used on an empty queue", async () => {
+    const harness = new InteractionHarness([]);
+
+    const interaction = await harness.sendLoopQueue();
+    const payload = getPayload(interaction);
+
+    expectPublicReply(interaction);
+    expect(payload.embeds[0].title).toBe("Cannot Enable Queue Loop");
+    expect(payload.embeds[0].description).toBe(
+      "The queue is empty. Add tracks with /play first.",
+    );
+  });
+
+  it("uses playback voice-channel validation for /loop queue", async () => {
+    const harness = new InteractionHarness([]);
+    await harness.sendJoin();
+    harness.member.voice.channelId = null;
+
+    const interaction = await harness.sendLoopQueue();
+    const payload = getPayload(interaction);
+
+    expect(payload.content).toBe(
+      "You need to join my voice channel before managing playback.",
+    );
+  });
+
+  it("does not trigger related autoplay when queue-loop handles continuation", async () => {
+    const [firstSong, secondSong, thirdSong] = buildSongFixtures(3);
+    const harness = new InteractionHarness([firstSong, secondSong, thirdSong]);
+
+    await harness.sendJoin();
+    await harness.sendAutoplayRelated();
+    await harness.sendPlay(firstSong.source);
+    await harness.sendPlay(secondSong.source);
+    await harness.sendPlay(thirdSong.source);
+    await harness.sendLoopQueue();
+    await harness.voiceGateway.finishCurrentTrack(harness.guildId);
+    await harness.voiceGateway.finishCurrentTrack(harness.guildId);
+    await harness.voiceGateway.finishCurrentTrack(harness.guildId);
+
+    const queue = await harness.getQueue();
+    expect(queue.current?.track.title).toBe(firstSong.title);
+    expect(harness.catalog.searchCalls).toBe(0);
+  });
+
+  it("lets track-loop take priority while queue-loop waits", async () => {
+    const [firstSong, secondSong, thirdSong] = buildSongFixtures(3);
+    const harness = new InteractionHarness([firstSong, secondSong, thirdSong]);
+
+    await harness.sendJoin();
+    await harness.sendPlay(firstSong.source);
+    await harness.sendPlay(secondSong.source);
+    await harness.sendPlay(thirdSong.source);
+    await harness.sendLoopQueue();
+    await harness.sendLoop();
+    await harness.voiceGateway.finishCurrentTrack(harness.guildId);
+
+    const queue = await harness.getQueue();
+    expect(queue.current?.track.title).toBe(firstSong.title);
+    expect(queue.upcoming.map((item) => item.track.title)).toEqual([
+      secondSong.title,
+      thirdSong.title,
+    ]);
+    expect(queue.loopCurrent).toBe(true);
+    expect(queue.queueLoop).toBe(true);
+    expect(harness.voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      firstSong.title,
+      firstSong.title,
+    ]);
+  });
+
   it("joins, queues song #2, skips to it, queues song #3, and autoplays song #3 after song #2 ends", async () => {
     const [firstSong, secondSong, thirdSong] = buildSongFixtures(3);
     const harness = new InteractionHarness([firstSong, secondSong, thirdSong]);

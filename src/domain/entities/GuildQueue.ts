@@ -17,13 +17,17 @@ export interface QueueState {
   upcoming: QueueItem[];
   status: PlaybackStatus;
   loopCurrent: boolean;
+  queueLoop: boolean;
+  queueLoopItems: QueueItem[];
 }
 
 export class GuildQueue {
   private currentItem?: QueueItem;
   private upcomingItems: QueueItem[];
+  private queueLoopItems: QueueItem[];
   private playbackStatus: PlaybackStatus;
   private currentLoopEnabled: boolean;
+  private queueLoopEnabled: boolean;
 
   constructor(
     public readonly guildId: string,
@@ -31,9 +35,17 @@ export class GuildQueue {
   ) {
     this.currentItem = state?.current;
     this.upcomingItems = [...(state?.upcoming ?? [])];
+    this.queueLoopItems =
+      state?.queueLoopItems !== undefined
+        ? [...state.queueLoopItems]
+        : [
+            ...(this.currentItem ? [this.currentItem] : []),
+            ...this.upcomingItems,
+          ];
     this.playbackStatus = state?.status ?? "idle";
     this.currentLoopEnabled =
       this.currentItem !== undefined ? (state?.loopCurrent ?? false) : false;
+    this.queueLoopEnabled = state?.queueLoop ?? false;
   }
 
   get current(): QueueItem | undefined {
@@ -52,17 +64,28 @@ export class GuildQueue {
     return this.currentLoopEnabled;
   }
 
+  isQueueLoopEnabled(): boolean {
+    return this.queueLoopEnabled;
+  }
+
+  toggleQueueLoop(): boolean {
+    this.queueLoopEnabled = !this.queueLoopEnabled;
+    return this.queueLoopEnabled;
+  }
+
   get isActive(): boolean {
     return this.currentItem !== undefined && this.playbackStatus !== "idle";
   }
 
   enqueue(item: QueueItem): number {
     this.upcomingItems.push(item);
+    this.queueLoopItems.push(item);
     return this.upcomingItems.length;
   }
 
   playNow(item: QueueItem): void {
     this.currentItem = item;
+    this.queueLoopItems = [item];
     this.playbackStatus = "playing";
     this.currentLoopEnabled = false;
   }
@@ -77,12 +100,40 @@ export class GuildQueue {
     return nextItem;
   }
 
+  advance(): QueueItem | null {
+    if (this.currentLoopEnabled && this.currentItem) {
+      return this.currentItem;
+    }
+
+    const nextItem = this.upcomingItems.shift() ?? null;
+
+    this.currentItem = nextItem ?? undefined;
+    this.playbackStatus = nextItem ? "playing" : "idle";
+    this.currentLoopEnabled = false;
+
+    if (nextItem) {
+      return nextItem;
+    }
+
+    if (this.queueLoopEnabled && this.queueLoopItems.length > 0) {
+      this.upcomingItems = [...this.queueLoopItems];
+      const wrappedItem = this.upcomingItems.shift()!;
+      this.currentItem = wrappedItem;
+      this.playbackStatus = "playing";
+
+      return wrappedItem;
+    }
+
+    return null;
+  }
+
   skipCurrent(): QueueItem | undefined {
     if (!this.currentItem) {
       throw new Error("There is nothing to skip.");
     }
 
-    return this.startNext();
+    this.currentLoopEnabled = false;
+    return this.advance() ?? undefined;
   }
 
   finishCurrent(): QueueItem | undefined {
@@ -127,12 +178,17 @@ export class GuildQueue {
     }
 
     const [removedItem] = this.upcomingItems.splice(position - 1, 1);
+    this.queueLoopItems = this.queueLoopItems.filter(
+      (item) => item.id !== removedItem.id,
+    );
     return removedItem;
   }
 
   clearUpcoming(): number {
     const removedCount = this.upcomingItems.length;
     this.upcomingItems = [];
+    this.queueLoopItems = this.currentItem ? [this.currentItem] : [];
+    this.queueLoopEnabled = false;
     return removedCount;
   }
 
@@ -140,6 +196,15 @@ export class GuildQueue {
     this.currentItem = undefined;
     this.playbackStatus = "idle";
     this.currentLoopEnabled = false;
+  }
+
+  leave(): void {
+    this.currentItem = undefined;
+    this.upcomingItems = [];
+    this.queueLoopItems = [];
+    this.playbackStatus = "idle";
+    this.currentLoopEnabled = false;
+    this.queueLoopEnabled = false;
   }
 
   pause(): void {
@@ -165,6 +230,8 @@ export class GuildQueue {
       upcoming: [...this.upcomingItems],
       status: this.playbackStatus,
       loopCurrent: this.currentLoopEnabled,
+      queueLoop: this.queueLoopEnabled,
+      queueLoopItems: [...this.queueLoopItems],
     };
   }
 }

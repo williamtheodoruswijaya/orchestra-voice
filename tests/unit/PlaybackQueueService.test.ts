@@ -161,12 +161,14 @@ function createService(
   voiceGateway: FakeVoiceGateway;
   streamResolver: FakeStreamResolver;
   settingsRepository: InMemoryGuildPlaybackSettingsRepository;
+  queueRepository: InMemoryGuildQueueRepository;
 } {
   const voiceGateway = new FakeVoiceGateway();
   const streamResolver = new FakeStreamResolver();
   const settingsRepository = new InMemoryGuildPlaybackSettingsRepository();
+  const queueRepository = new InMemoryGuildQueueRepository();
   const service = new PlaybackQueueService(
-    new InMemoryGuildQueueRepository(),
+    queueRepository,
     streamResolver,
     voiceGateway,
     (() => {
@@ -182,7 +184,13 @@ function createService(
     },
   );
 
-  return { service, voiceGateway, streamResolver, settingsRepository };
+  return {
+    service,
+    voiceGateway,
+    streamResolver,
+    settingsRepository,
+    queueRepository,
+  };
 }
 
 describe("PlaybackQueueService", () => {
@@ -718,6 +726,142 @@ describe("PlaybackQueueService", () => {
     expect(voiceGateway.playCalls.map((call) => call.title)).toEqual([
       "Track a",
     ]);
+  });
+
+  it("leaves voice idle without another play call when handleTrackFinished exhausts the queue with queue-loop off", async () => {
+    const { service, voiceGateway } = createService();
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+
+    const result = await service.handleTrackFinished("guild-a");
+
+    expect(result.nextItem).toBeUndefined();
+    expect(result.queue.current).toBeUndefined();
+    expect(result.queue.status).toBe("idle");
+    expect(voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      "Track a",
+    ]);
+  });
+
+  it("plays item 1 when handleTrackFinished reaches the last item with queue-loop on", async () => {
+    const { service, voiceGateway, queueRepository } = createService();
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("b") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("c") });
+    const queue = await queueRepository.getByGuildId("guild-a");
+    queue.toggleQueueLoop();
+    await queueRepository.save(queue);
+
+    await service.handleTrackFinished("guild-a");
+    await service.handleTrackFinished("guild-a");
+    const result = await service.handleTrackFinished("guild-a");
+
+    expect(result.nextItem?.track.title).toBe("Track a");
+    expect(result.queue.current?.track.title).toBe("Track a");
+    expect(voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      "Track a",
+      "Track b",
+      "Track c",
+      "Track a",
+    ]);
+  });
+
+  it("preserves queue order after handleTrackFinished wraps with queue-loop on", async () => {
+    const { service, queueRepository } = createService();
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("b") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("c") });
+    const queue = await queueRepository.getByGuildId("guild-a");
+    queue.toggleQueueLoop();
+    await queueRepository.save(queue);
+
+    await service.handleTrackFinished("guild-a");
+    await service.handleTrackFinished("guild-a");
+    const result = await service.handleTrackFinished("guild-a");
+
+    expect(result.queue.current?.track.title).toBe("Track a");
+    expect(result.queue.upcoming.map((item) => item.track.title)).toEqual([
+      "Track b",
+      "Track c",
+    ]);
+  });
+
+  it("replays the same item when track-loop and queue-loop are both on", async () => {
+    const { service, voiceGateway, queueRepository } = createService();
+
+    await service.enqueue({ guildId: "guild-a", track: createTrack("a") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("b") });
+    const queue = await queueRepository.getByGuildId("guild-a");
+    queue.toggleQueueLoop();
+    await queueRepository.save(queue);
+    await service.toggleCurrentLoop("guild-a");
+
+    const result = await service.handleTrackFinished("guild-a");
+
+    expect(result.nextItem?.track.title).toBe("Track a");
+    expect(result.queue.current?.track.title).toBe("Track a");
+    expect(result.queue.upcoming.map((item) => item.track.title)).toEqual([
+      "Track b",
+    ]);
+    expect(voiceGateway.playCalls.map((call) => call.title)).toEqual([
+      "Track a",
+      "Track a",
+    ]);
+  });
+
+  it("rolls back the wrapped item on resolver failure without clearing queue-loop", async () => {
+    const { service, streamResolver, queueRepository } = createService();
+    const firstTrack = createTrack("a");
+
+    await service.enqueue({ guildId: "guild-a", track: firstTrack });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("b") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("c") });
+    const queue = await queueRepository.getByGuildId("guild-a");
+    queue.toggleQueueLoop();
+    await queueRepository.save(queue);
+    await service.handleTrackFinished("guild-a");
+    await service.handleTrackFinished("guild-a");
+    streamResolver.failedTrackIds.add(firstTrack.id);
+
+    await expect(service.handleTrackFinished("guild-a")).rejects.toThrow(
+      "Cannot resolve Track a",
+    );
+
+    const rolledBackQueue = await service.getQueue("guild-a");
+    expect(rolledBackQueue.current).toBeUndefined();
+    expect(rolledBackQueue.upcoming.map((item) => item.track.title)).toEqual([
+      "Track a",
+      "Track b",
+      "Track c",
+    ]);
+    expect(rolledBackQueue.queueLoop).toBe(true);
+  });
+
+  it("does not automatically retry after a queue-loop rollback", async () => {
+    const { service, streamResolver, queueRepository } = createService();
+    const firstTrack = createTrack("a");
+
+    await service.enqueue({ guildId: "guild-a", track: firstTrack });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("b") });
+    await service.enqueue({ guildId: "guild-a", track: createTrack("c") });
+    const queue = await queueRepository.getByGuildId("guild-a");
+    queue.toggleQueueLoop();
+    await queueRepository.save(queue);
+    await service.handleTrackFinished("guild-a");
+    await service.handleTrackFinished("guild-a");
+    streamResolver.failedTrackIds.add(firstTrack.id);
+    await expect(service.handleTrackFinished("guild-a")).rejects.toThrow(
+      "Cannot resolve Track a",
+    );
+    const resolveCountAfterRollback = streamResolver.resolveInputs.length;
+
+    const idleResult = await service.handleTrackFinished("guild-a");
+
+    expect(idleResult.autoplayStatus).toBe("not-needed");
+    expect(idleResult.nextItem).toBeUndefined();
+    expect(streamResolver.resolveInputs).toHaveLength(resolveCountAfterRollback);
   });
 
   it("starts a related track when related autoplay is enabled and queue is empty", async () => {

@@ -1,301 +1,234 @@
-# AGENTS.md
+# AGENTS.md — orchestra-voice
 
-## Project overview
+## What this repo is
 
-This repository contains a Discord music bot built with Node.js and TypeScript.
+A Discord music bot built with Node.js and TypeScript.
+Stack: `discord.js`, `@discordjs/voice`, `yt-dlp`, `ffmpeg-static`.
 
-Current product goals:
+The bot joins a voice channel, resolves audio through `yt-dlp`, and plays
+through a per-guild queue that loops automatically until the queue is empty
+or the user stops it.
 
-- Clean Architecture
-- Maintainable Discord bot command handling
-- Good UX for search, selection, queueing, and playback
-- Clear distinction between metadata providers and playable audio sources
-- Reliable tests and CI
+---
+
+## The one rule that overrides everything else
+
+> **`/play` always enqueues. It never interrupts the current song.**
+
+If something is playing, `/play` appends to the queue.
+If nothing is playing, `/play` starts immediately from queue position 1.
+The queue advances automatically when each item finishes.
+This is the central product behavior. Do not change it.
+
+---
+
+## Architecture layers
+
+| Layer | Path | Allowed to import | Must NOT import |
+|---|---|---|---|
+| Domain | `src/domain` | nothing external | Discord SDK, HTTP, DB |
+| Application | `src/application` | domain, ports | Discord SDK, raw HTTP |
+| Infrastructure | `src/infrastructure` | application, domain, SDKs | nothing inward-violating |
+| Bootstrap | `src/app/bootstrap` | everything | business logic |
+
+Dependency arrow: `bootstrap → infrastructure → application → domain`
+
+Never put queue logic in a slash-command handler.
+Never put Discord objects in domain entities.
+Never put HTTP calls in the domain layer.
+
+---
+
+## Core concepts — use these exact names in code
+
+| Concept | What it is |
+|---|---|
+| `Track` | Metadata returned by a search provider (title, url, duration, provider) |
+| `QueueItem` | An item scheduled for playback — wraps a `Track` plus request metadata |
+| `PlayableSource` | A resolved audio stream/URL that `@discordjs/voice` can actually play |
+| `GuildQueue` | Per-guild ordered list of `QueueItem` plus playback state |
+| `SearchSession` | Ephemeral per-guild list of `Track` results from `/search` |
+| `SelectedTrack` | The track a user picked from a `SearchSession` |
+
+A `Track` is **not** a `PlayableSource`. A YouTube watch URL is not audio.
+Resolution happens through `yt-dlp` at the moment an item becomes current.
+
+---
+
+## Queue loop behavior — authoritative spec
+
+```
+User: /play "lo-fi beats"
+Bot:  [idle]  → resolves → plays item 1
+Bot:  [item 1 ends] → auto-advances → plays item 2
+Bot:  [item 2 ends] → auto-advances → plays item 3
+...
+Bot:  [queue empty] → stays in channel, waits
+```
+
+```
+User: /play "song A"           → queue: [A]  → plays A immediately
+User: /play "song B"           → queue: [A, B]  → A still playing
+User: /play "song C"           → queue: [A, B, C]  → A still playing
+Bot:  [A ends]                 → plays B
+Bot:  [B ends]                 → plays C
+Bot:  [C ends, queue empty]    → idle, stays connected
+```
+
+- The queue is a flat ordered list. No shuffle by default.
+- Loop mode (`/loop`) replays the current item instead of advancing.
+- `/skip` forces advance to next item, regardless of loop mode.
+- `/clearqueue` removes upcoming items without stopping the current item.
+- `/stop` stops current playback but preserves upcoming queue items.
+- Bot never auto-leaves on idle by default.
+
+---
+
+## Playback truth — non-negotiable
+
+| Input | Is it audio? |
+|---|---|
+| YouTube watch URL | No — metadata only |
+| Spotify track URL | No — metadata only |
+| Direct `.mp3` / audio URL | Yes — after URL validation |
+| Text search query | No — must be resolved by yt-dlp |
+
+`yt-dlp` is the resolver. It turns a YouTube URL or search query into a
+stream that `@discordjs/voice` can consume via `createAudioResource`.
+
+Never claim YouTube/Spotify page URLs produce direct audio.
+Never skip the resolver step.
+
+---
 
 ## Voice presence rule
 
-This bot is intended to remain online 24/7 and may remain connected to a voice channel continuously.
+The bot is designed for 24/7 presence. It may stay connected continuously.
 
-Do not introduce idle auto-leave as a default behavior.
+- Do NOT add idle auto-leave as a default behavior.
+- If auto-leave is ever added: it must be opt-in, per-guild, documented.
+- Prefer keeping the bot present and silent over auto-leaving.
 
-If an idle-leave feature is ever added:
-
-- it must be optional
-- it must be explicit
-- it must be configurable per guild
-- it must be documented clearly in contributor and user-facing docs
-
-When improving voice comfort or UX, prefer:
-
-- low-noise responses
-- better queue-ended behavior
-- mood or ambience features
-- autoplay suggestions
-- same-channel politeness
-- clear playback state messaging
-
-Do not assume “leave on idle” is a UX improvement in this repository.
-Persistent voice presence is an intentional product behavior.
-
-Important architectural truth:
-
-- YouTube and Spotify integrations in this repo should be treated as metadata/search providers unless the code explicitly uses a separate playable audio source/resolver.
-- Do not assume a YouTube watch page URL or Spotify track page URL is directly playable audio.
-- Preserve this distinction in all changes.
-
-## Architecture expectations
-
-Prefer these dependency boundaries:
-
-- `src/domain`
-  - pure business logic only
-  - entities, value objects, policies
-  - no Discord SDK code
-  - no fetch / HTTP calls
-  - no persistence details
-
-- `src/application`
-  - use cases
-  - ports / interfaces
-  - orchestration logic
-  - depends on domain and ports only
-
-- `src/infrastructure`
-  - Discord client and adapters
-  - voice gateway implementation
-  - provider adapters (YouTube / Spotify / direct resolver)
-  - repository implementations
-  - logging
-  - external API access
-
-- `src/app/bootstrap`
-  - composition root
-  - startup wiring
-  - dependency assembly
-  - command registration
-  - no heavy business logic
-
-When changing code:
-
-- keep Discord-specific interaction objects near the boundary
-- move business decisions into use cases
-- avoid large god-functions in `index.ts`
-- do not couple queue logic directly to slash-command parsing
-- prefer cohesive small files over giant multi-purpose files
-
-## Working rules
-
-Before making significant changes:
-
-1. Inspect the current code path end-to-end
-2. Identify affected use cases, ports, and adapters
-3. Make a short implementation plan
-4. Keep changes incremental and easy to review
-
-For non-trivial tasks:
-
-- explain the intended change in a short checklist before editing
-- avoid speculative rewrites
-- preserve working behavior unless a change is intentional and justified
-
-## Code style
-
-- TypeScript strictness should be preserved or improved
-- prefer explicit types at architecture boundaries
-- keep functions focused and named by behavior
-- prefer small use cases with clear input/output
-- avoid magic strings when a type or constant is more appropriate
-- keep error messages user-friendly at the Discord boundary
-- keep internal logs diagnostic and specific
-
-## Search and playback rules
-
-This repo must preserve the distinction between:
-
-- metadata tracks from search
-- actually playable sources
-
-Preferred concepts:
-
-- `Track`: metadata result
-- `SelectedTrack`: current chosen metadata result for a guild
-- `QueueItem`: an item scheduled for playback
-- `PlayableSource` or equivalent: a resolvable/playable audio input
-
-If implementing queueing:
-
-- queue is per guild
-- adding a track must not interrupt the currently playing track unless the user explicitly skips
-- playback should continue automatically to the next item when the current item finishes
-- stop / leave should clean up state predictably
+---
 
 ## Provider reliability rule
 
-This repository must treat external providers as unreliable by default.
+Providers fail. Design for it.
 
-YouTube and Spotify integrations may fail due to:
+- YouTube quota exhaustion → degrade gracefully, log clearly, keep bot alive
+- Spotify restrictions → explain limitation to user, do not fake playback
+- yt-dlp failure → rollback `QueueItem` to front of queue, tell user
+- Any provider failure → never crash the bot, never corrupt queue state
 
-- quota exhaustion
-- premium/subscription requirements
-- account restrictions
-- credential misconfiguration
-- rate limits
-- temporary upstream outages
+Apply cooldown/backoff when providers fail repeatedly.
+Do not retry the same failing call in a tight loop.
 
-Provider failures must not:
+---
 
-- crash the bot
-- corrupt queue state
-- trigger infinite autoplay/search loops
-- spam repeated identical logs
-- fake playback from metadata-only URLs
+## Autoplay rule
 
-When a provider fails:
+Autoplay is opt-in per guild (`/autoplay mode:related`). Default is `off`.
 
-- degrade gracefully
-- classify the failure clearly
-- keep user-facing feedback calm and honest
-- apply cooldown or suppression where repeated retries would be noisy or wasteful
-- prefer bounded fallback logic only when it is explicit and safe
+When autoplay is on and queue empties:
+1. Search for a related track using the scoring function
+2. Resolve the candidate through yt-dlp
+3. If resolution fails → stop cleanly, stay in channel
+4. Never loop forever searching for a candidate
+5. Never auto-leave after a failed autoplay attempt
 
-## Autoplay safety rule
+Autoplay candidates still go through the full resolver path.
+Metadata-only results are never queued as fake audio.
 
-Autoplay and related-track continuation must be safe by default.
+---
 
-If queue ends and autoplay is enabled:
+## Skill routing — read the right skill before working in an area
 
-- attempt a bounded related-track lookup
-- do not retry endlessly in a loop
-- if provider lookup fails, stop continuation cleanly for that transition
-- preserve bot uptime and voice presence
-- do not auto-leave by default
+| Area | Skill file |
+|---|---|
+| `/play`, `/enqueue`, `/skip`, queue loop | `.agents/skills/playback-semantics.md` |
+| Autoplay, related-track scoring, mood | `.agents/skills/autoplay-related.md` |
+| Voice UX, embeds, same-channel checks | `.agents/skills/voice-comfort.md` |
+| Provider failures, quota, cooldown | `.agents/skills/provider-resilience.md` |
+| Startup, env vars, Docker, hosting | `.agents/skills/deployment-runtime.md` |
+| Docs, README, GETTING_STARTED | `.agents/skills/docs-and-onboarding.md` |
 
-Autoplay should distinguish:
+**Before making a significant change, read the relevant skill file.**
+The skills contain patterns, anti-patterns, and implementation constraints
+specific to this codebase.
 
-- no related candidate
-- provider unavailable
-- provider on cooldown
-- metadata-only suggestion
-- playable continuation
+---
 
-## Voice presence rule
+## Working rules
 
-This bot is intended to remain online 24/7 and may remain connected to a voice channel continuously.
+Before editing anything:
+1. Read the relevant skill file.
+2. Trace the current code path end-to-end.
+3. Write a short checklist of your planned edits.
+4. Confirm you are not violating a layer boundary.
 
-Do not introduce idle auto-leave as a default behavior.
+During editing:
+- One logical change at a time.
+- No dead imports, no commented-out code.
+- No placeholder TODOs for work you are not doing.
+- Prefer small focused files over god-objects.
 
-If an idle-leave feature is ever added:
+After editing:
+- `npm run typecheck` must pass.
+- `npm run build` must pass.
+- `npm test` must pass.
+- Update docs if behavior changed.
 
-- it must be optional
-- it must be explicit
-- it must be configurable per guild
-- it must be documented clearly
+---
 
-Persistent voice presence is intentional product behavior.
+## Code style
 
-## Deployment/runtime rule
+- TypeScript strict mode — preserve or improve it.
+- Explicit types at architecture boundaries.
+- Functions named by behavior, not by type (`enqueueTrack`, not `trackHandler`).
+- User-facing error messages: calm, honest, helpful.
+- Internal logs: diagnostic and specific (`pino` logger).
+- No magic strings — use constants or enums at boundaries.
 
-Changes must remain deployable in long-running Node.js environments.
+---
 
-Before considering a task complete:
+## Test expectations
 
-- confirm the real runtime entry point
-- avoid fragile startup assumptions
-- document environment requirements clearly
-- keep source-run vs build-run assumptions explicit
+Write meaningful tests for:
+- Queue add while idle → starts playback
+- Queue add while playing → appends, does not interrupt
+- Queue order preservation
+- Auto-advance to next item when current finishes
+- Skip behavior
+- Clear queue behavior
+- Remove valid/invalid position
+- Rollback on resolver failure
+- Search session / selected track persistence per guild
+- Empty state behavior (empty queue, no search results)
 
-## Skill routing guidance
+Do not write placeholder tests just for coverage.
+Prefer domain/application tests over Discord SDK integration tests.
 
-Use the appropriate repo-local skill when working in these areas:
-
-- `playback-semantics`
-  - `/play`, `/enqueue`, `/skip`, rollback, current/upcoming transitions
-
-- `autoplay-related`
-  - related-track continuation, autoplay settings, similarity scoring
-
-- `voice-comfort`
-  - low-noise UX, same-channel politeness, persistent voice presence behavior
-
-- `provider-resilience`
-  - quota handling, 403 handling, cooldown/backoff, fallback logic, no-loop guarantees
-
-- `deployment-runtime`
-  - startup entrypoint, runtime assumptions, hosting compatibility, env handling
-
-- `docs-and-onboarding`
-  - `GETTING_STARTED.md`, `README.md`, `.env.example`, contributor docs
-
-## Testing expectations
-
-Every meaningful behavior change should come with tests where practical.
-
-Prioritize tests for:
-
-- use cases
-- queue behavior
-- repository behavior
-- search session behavior
-- playback sequencing logic
-- empty-state and invalid-input behavior
-
-Do not add placeholder tests just for coverage.
-
-## Verification commands
-
-Before considering a task done, run the relevant commands if available:
-
-- install dependencies:
-  - `npm install`
-
-- run development bot:
-  - `npm run dev`
-
-- register slash commands:
-  - `npm run register:commands`
-
-- run tests:
-  - `npm test`
-
-- run build:
-  - `npm run build`
-
-If lint/typecheck scripts exist, run them too.
-
-## Documentation expectations
-
-If you add or significantly change behavior:
-
-- update `GETTING_STARTED.md`
-- update command documentation if needed
-- document any new environment variables in `.env.example`
-- document any new provider limitations or playback assumptions
-
-## Contributor UX expectations
-
-Favor improvements that make the bot easier to use and easier to understand:
-
-- informative embeds
-- clear queue feedback
-- good empty-state messaging
-- safe error messages
-- consistent command naming
-- minimal surprise in playback behavior
-
-## Constraints
-
-- do not hardcode secrets
-- do not commit `.env`
-- do not introduce hidden provider assumptions
-- do not claim direct playback from unsupported metadata URLs unless the repo truly implements a compliant resolver path
-- do not silently rewrite architecture boundaries just to “make it work”
+---
 
 ## Definition of done
 
 A task is done when:
+- The implementation matches the requested behavior
+- Architecture boundaries are intact
+- `typecheck`, `build`, and `test` all pass
+- Docs are updated where behavior changed
+- The change is reviewable without reverse-engineering intent
 
-- the implementation matches the requested behavior
-- architecture boundaries remain understandable
-- tests pass
-- docs are updated where needed
-- the change is reviewable by a human contributor without reverse-engineering intent
+---
+
+## Verification commands
+
+```bash
+npm install              # install deps
+npm run dev              # run bot (source mode)
+npm run register:commands # register slash commands with Discord
+npm run typecheck        # tsc --noEmit
+npm run build            # compile TypeScript
+npm start                # run compiled bot
+npm test                 # run vitest
+```

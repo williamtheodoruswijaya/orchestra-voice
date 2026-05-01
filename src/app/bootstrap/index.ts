@@ -9,6 +9,7 @@ import { GetSelectedTrack } from "../../application/use-cases/GetSelectedTrack";
 import { JoinVoiceChannel } from "../../application/use-cases/JoinVoiceChannel";
 import { LeaveVoiceChannel } from "../../application/use-cases/LeaveVoiceChannel";
 import { LoopCurrentTrack } from "../../application/use-cases/LoopCurrentTrack";
+import { LoopQueue } from "../../application/use-cases/LoopQueue";
 import { PausePlayback } from "../../application/use-cases/PausePlayback";
 import { PickTrack } from "../../application/use-cases/PickTrack";
 import { PlayNextTrack } from "../../application/use-cases/PlayNextTrack";
@@ -128,6 +129,7 @@ async function main(): Promise<void> {
     enqueueTrack: new EnqueueTrack(playbackQueueService),
     getQueue: new GetQueue(playbackQueueService),
     loopCurrentTrack: new LoopCurrentTrack(playbackQueueService),
+    loopQueue: new LoopQueue(playbackQueueService),
     skipTrack: new SkipTrack(playbackQueueService),
     clearQueue: new ClearQueue(playbackQueueService),
     removeQueueItem: new RemoveQueueItem(playbackQueueService),

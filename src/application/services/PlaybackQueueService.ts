@@ -83,6 +83,10 @@ export interface LoopCurrentResult extends QueueMutationResult {
   loopCurrent: boolean;
 }
 
+export interface QueueLoopResult extends QueueMutationResult {
+  queueLoop: boolean;
+}
+
 export interface RemoveQueueItemResult extends QueueMutationResult {
   removedItem: QueueItem;
 }
@@ -268,7 +272,7 @@ export class PlaybackQueueService {
     }
 
     const finishedItem = queue.current;
-    const nextItem = queue.finishCurrent();
+    const nextItem = queue.advance();
 
     if (!nextItem) {
       const relatedLookup = await this.findRelatedTrack(
@@ -368,6 +372,10 @@ export class PlaybackQueueService {
     }
   }
 
+  async handleTrackFinished(guildId: string): Promise<AdvancePlaybackResult> {
+    return this.advanceAfterCurrent(guildId);
+  }
+
   async skip(guildId: string): Promise<AdvancePlaybackResult> {
     const queue = await this.queueRepository.getByGuildId(guildId);
     const nextItem = queue.skipCurrent();
@@ -451,6 +459,22 @@ export class PlaybackQueueService {
     return {
       item,
       loopCurrent,
+      queue: queue.toState(),
+    };
+  }
+
+  async toggleQueueLoop(guildId: string): Promise<QueueLoopResult> {
+    const queue = await this.queueRepository.getByGuildId(guildId);
+
+    if (!queue.current && queue.upcoming.length === 0) {
+      throw new Error("The queue is empty. Add tracks with /play first.");
+    }
+
+    const queueLoop = queue.toggleQueueLoop();
+    await this.queueRepository.save(queue);
+
+    return {
+      queueLoop,
       queue: queue.toState(),
     };
   }

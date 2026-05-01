@@ -1,134 +1,165 @@
+# Skill: voice-comfort
+
+Read this skill before working on:
+- Voice channel join / leave validation
+- Same-channel checks
+- Embed design for any command
+- Empty-state messaging
+- Error messaging
+- Playback state feedback
+
 ---
-name: voice-comfort
-description: Use this skill when implementing or modifying features that make the bot feel more pleasant, calm, and supportive inside voice channels without sacrificing maintainability.
+
+## Same-channel validation
+
+Before any command that mutates playback state, validate:
+
+```
+1. Is the user in a voice channel?
+   → No: reply "You need to be in a voice channel first." — stop
+2. Is the bot in a voice channel?
+   → No: join the user's channel, continue
+3. Is the bot in a DIFFERENT voice channel than the user?
+   → Yes: reply "I'm already playing in <#channelId>." — stop
+```
+
+Commands that require same-channel: `/skip`, `/stop`, `/pause`, `/resume`,
+`/clearqueue`, `/remove`, `/loop`, `/leave`
+
+Commands that join if needed: `/play`, `/enqueue` (if not yet connected)
+
+Commands that don't need voice at all: `/search`, `/queue`, `/nowplaying`,
+`/selected`, `/autoplay`, `/mood`
+
 ---
 
-# Purpose
+## Persistent voice presence
 
-This skill governs "voice comfort" behavior in `orchestra-voice`.
+The bot stays in the voice channel when the queue empties.
+It does NOT auto-leave.
 
-Use this skill whenever the task involves:
+Never add idle-triggered disconnect logic as a default.
+If a timeout feature is ever added:
+- Make it opt-in via guild setting
+- Default must remain "stay connected"
+- Document it explicitly
 
-- reducing noisy UX
-- making the bot feel calm and helpful in voice channels
-- channel politeness
-- ambience / mood behavior
-- queue-ended messaging
-- comfort presets
-- staying in voice channels without being disruptive
+---
 
-Important product truth:
+## Reply visibility
 
-- This bot is intended to stay online 24/7
-- It may stay in a voice channel continuously
-- Do NOT implement idle auto-leave as a default comfort behavior
+All command replies in a guild text channel should be public (not ephemeral),
+so all users in the server can see queue changes.
 
-# Core rules
+Exceptions — use ephemeral for:
+- Validation errors that are personal ("you're not in a voice channel")
+- Errors that expose internal state only relevant to the requester
 
-1. Do not auto-leave on idle by default.
-   - The bot is allowed to remain connected in voice channels for long periods.
-   - Idle cleanup should not be treated as a primary comfort feature in this repository.
-   - If ever introduced, it must be explicit, optional, and not the default.
+---
 
-2. Comfort means "pleasant and non-disruptive", not "chatty".
-   - Prefer low-noise UX.
-   - Avoid spamming text channels with unnecessary updates.
+## Embed design guidelines
 
-3. Favor ephemeral or minimal responses where appropriate.
-   - Public messages should be reserved for meaningful events:
-     - now playing
-     - queue ended
-     - autoplay suggestion
-     - major playback state changes
-   - Do not flood channels with repetitive acknowledgements.
+Every meaningful playback response uses a Discord embed, not a plain string.
 
-4. Channel politeness matters.
-   - Validate whether the user is in the same voice channel as the bot for playback-control actions when appropriate.
-   - Give clear, friendly messages when they are not.
+**Now Playing embed:**
+```
+▶️ Now Playing                          [color: #5865F2 Discord blurple]
+─────────────────────────────────────────
+Title:     Lofi Hip Hop Radio - Beats to Study
+Provider:  YouTube
+Duration:  3:42
+Requested: @username
+Queue:     3 tracks remaining
+```
 
-5. Comfort features should remain maintainable.
-   - Do not add gimmicks.
-   - Do not turn the bot into a social chatbot unless the feature clearly supports the voice experience.
+**Added to Queue embed:**
+```
+🎵 Added to Queue                       [color: #57F287 Discord green]
+─────────────────────────────────────────
+Title:     Chill Beats Mix
+Provider:  YouTube
+Position:  #2 in queue
+```
 
-# Recommended comfort features
+**Queue Display embed:**
+```
+📋 Queue — 4 tracks                     [color: #5865F2]
+─────────────────────────────────────────
+▶ 1. Lofi Hip Hop Radio       [YouTube]  3:42   ← current
+   2. Chill Beats Mix         [YouTube]  4:10
+   3. Study Music             [Spotify]  5:00
+   4. Focus Flow              [YouTube]  2:55
+```
 
-Good candidate features:
+**Error embed:**
+```
+❌ Error                                [color: #ED4245 Discord red]
+─────────────────────────────────────────
+Could not resolve audio for this track.
+The track has been kept at the top of your queue.
+```
 
-- low-noise mode
-- calm queue-ended messages
-- helpful "now playing" embed formatting
-- gentle autoplay suggestion embeds
-- mood presets that influence recommendation ranking
-- same-channel validation UX
-- "ambient continuation" behavior when queue ends
-- reduced public messaging unless important
+**Empty state embed:**
+```
+📋 Queue is Empty                       [color: #99AAB5 gray]
+─────────────────────────────────────────
+Use /play or /enqueue to add tracks.
+```
 
-# Mood / ambience guidance
+---
 
-If implementing mood presets, keep them simple.
+## Empty state handling
 
-Suggested moods:
+Every command must handle the empty state explicitly:
 
-- `focus`
-- `chill`
-- `upbeat`
+| Command | Empty state message |
+|---|---|
+| `/queue` | "The queue is empty. Use /play to add tracks." |
+| `/nowplaying` | "Nothing is playing right now." |
+| `/skip` | "Nothing is playing to skip." |
+| `/clearqueue` | "The queue is already empty." |
+| `/remove` | "No upcoming tracks to remove." |
+| `/enqueue` | "No track selected. Use /search first." |
+| `/selected` | "No track selected. Use /search first." |
 
-Mood can influence:
+---
 
-- related-track suggestion ranking
-- embed tone / formatting
-- autoplay behavior preferences
+## Provider limitation messaging
 
-Mood should not radically alter architecture.
-It should be a lightweight guild setting.
+When a user selects a Spotify-only track that cannot be resolved:
 
-# UX messaging principles
+```
+⚠️ Metadata Only
+─────────────────────────────────────────
+This Spotify track cannot be played directly.
+Spotify does not expose full-track audio for bots.
 
-Prefer messages like:
+The resolver will attempt to find a matching audio source.
+If it fails, the track will be returned to your queue.
+```
 
-- "Added **Track Name** to queue at position #3."
-- "Queue ended. Suggested next track: **...**"
-- "You need to be in the same voice channel as the bot to use this command."
+Do not lie. Do not pretend it will work. Do not hide the limitation.
 
-Avoid:
+---
 
-- vague "error occurred" replies
-- overly chatty ambient messages
-- multiple public messages for one logical event
+## Playback state indicators
 
-# Architectural guidance
+Use consistent emoji prefixes:
+- `▶️` — currently playing
+- `⏸️` — paused
+- `⏭️` — skipped
+- `🎵` — added to queue / enqueued
+- `📋` — queue display
+- `✅` — success action
+- `❌` — error
+- `⚠️` — warning / limitation
 
-Comfort features should be implemented through:
+---
 
-- guild-level settings
-- application use cases
-- well-contained infrastructure formatting
+## What NOT to do
 
-Do not bury comfort policy in giant Discord handlers.
-
-# Testing requirements
-
-Voice-comfort changes should include tests where practical for:
-
-- same-channel validation behavior
-- mood setting persistence / isolation per guild
-- low-noise setting behavior if implemented
-- queue-ended suggestion behavior
-- guild comfort setting defaults
-
-# Documentation requirements
-
-If comfort features are added or changed:
-
-- update `GETTING_STARTED.md`
-- document any new commands such as `/mood` or `/comfort`
-- document that the bot is designed to stay online and may remain in voice channels
-
-# Anti-patterns to avoid
-
-Do not:
-
-- add idle auto-leave as a default behavior
-- spam text channels
-- make comfort features overly magical or unpredictable
-- add features that make the bot noisier without improving experience
+- Do NOT use ephemeral for successful queue mutations
+- Do NOT silently ignore voice channel mismatch
+- Do NOT show raw error stack traces to users
+- Do NOT use plain string replies for playback state changes
+- Do NOT add unsolicited messages when the bot is idle

@@ -1,322 +1,320 @@
-# Getting Started
+# Getting Started — orchestra-voice
 
-This project is a Discord music bot built with Node.js, TypeScript, Discord.js, and `@discordjs/voice`.
+A Discord music bot that loops through a per-server queue automatically.
+Built with Node.js, TypeScript, `discord.js`, `@discordjs/voice`, and `yt-dlp`.
 
-The most important product rule is that metadata and playback are separate concepts. YouTube and Spotify providers return track metadata. A track becomes playable only when a separate playable-source resolver resolves it into audio that the voice gateway can play.
+---
 
-The voice presence rule is intentional: this bot may stay online and connected to voice channels continuously. Idle auto-leave is not a default behavior in this repository. If it is ever added, it must be explicit, optional, per-guild configurable, and documented.
+## What this bot does
+
+Users add tracks to a per-guild queue using `/play` or `/enqueue`.
+The bot plays each track in order. When one finishes, the next starts automatically.
+The bot stays in the voice channel until told to leave.
+
+**The central rule:** `/play` always enqueues. It never interrupts the current song.
+
+---
+
+## Metadata vs. playable audio — read this first
+
+This is the most important architectural concept in the codebase.
+
+| Source | What the bot gets | Can it play directly? |
+|---|---|---|
+| `/search` with YouTube | Track metadata (title, URL, duration) | No |
+| `/search` with Spotify | Track metadata | No |
+| YouTube watch URL | Metadata | No |
+| Spotify track URL | Metadata | No |
+| `yt-dlp` resolver | An actual audio stream URL | Yes |
+| Direct `.mp3` URL | Raw audio | Yes (after validation) |
+
+**YouTube and Spotify give you metadata. `yt-dlp` turns that into audio.**
+
+A YouTube watch page URL passed directly to the voice player will not work.
+Every track goes through `yt-dlp` at the moment it becomes current in the queue.
+This step is called resolution. Resolution is deferred — it happens when the
+track starts, not when it is enqueued.
+
+---
 
 ## Architecture
 
-The codebase follows a Clean Architecture direction:
-
-- `src/domain`
-  Pure business rules and state models. Queue ordering, queue item state, and track metadata concepts live here. This layer must not import Discord SDKs, HTTP clients, provider APIs, or persistence details.
-
-- `src/application`
-  Use cases, services, and ports. This layer orchestrates queue behavior, search-session behavior, playback sequencing, and outbound interfaces such as voice gateways, queue repositories, and stream resolvers.
-
-- `src/infrastructure`
-  External adapters. Discord interaction handling, Discord voice playback, YouTube/Spotify provider adapters, stream resolver implementations, logging, and in-memory repositories live here.
-
-- `src/app/bootstrap`
-  Composition root only. Startup code creates concrete dependencies, wires playback-finished callbacks, registers Discord event handlers, and starts the bot.
-
-Dependency direction should flow inward:
-
-```text
-app/bootstrap -> infrastructure -> application -> domain
+```
+src/
+├── domain/               Pure business rules — no Discord, no HTTP
+│   ├── entities/         GuildQueue, QueueItem, Track, GuildPlaybackSettings
+│   └── services/         RelatedTrackScorer (pure scoring logic)
+│
+├── application/          Orchestration — no Discord objects
+│   ├── services/         PlaybackQueueService, RelatedTrackService
+│   └── ports/            IVoiceGateway, IQueueRepository, ISearchProvider
+│
+├── infrastructure/       External adapters — Discord, providers, voice
+│   ├── discord/          Slash command handlers, embed builders
+│   ├── voice/            DiscordVoiceGateway (wraps @discordjs/voice)
+│   └── providers/        YouTubeProvider, SpotifyProvider, YtDlpResolver
+│
+└── app/bootstrap/        Startup and dependency wiring only
+    ├── index.ts          Entry point
+    └── register-commands.ts
 ```
 
-Infrastructure can implement application ports. Domain should remain pure.
+Dependency direction: `bootstrap → infrastructure → application → domain`
 
-## Core Concepts
+Domain must never import Discord SDK, HTTP clients, or provider APIs.
+Application must never contain raw Discord interaction objects.
+Business logic must never live in `index.ts` or command handlers.
 
-- `Track`
-  A metadata result from a provider such as YouTube or Spotify.
+---
 
-- Selected track
-  The result picked from the latest `/search` output for a guild. Selecting a track does not enqueue or play it by itself.
+## Queue behavior
 
-- `QueueItem`
-  A per-guild item scheduled for playback. Queue items wrap track metadata plus request metadata.
+```
+Bot is idle → /play "song A"  → resolves → starts playing A immediately
+              /play "song B"  → appends B  → A still playing
+              /play "song C"  → appends C  → A still playing
+A ends naturally              → bot auto-advances → plays B
+B ends naturally              → bot auto-advances → plays C
+C ends naturally, queue empty → bot stays in channel, idle
+```
 
-- Playable source
-  A resolved audio input such as a validated direct audio URL or a stream returned by an explicit resolver.
+Key behaviors:
+- `/play` enqueues. Never interrupts.
+- Auto-advance fires on the voice player's `idle` event (not a timer).
+- `/skip` forces advance — ignores loop mode.
+- `/loop` replays current item instead of advancing when it ends.
+- `/loop scope:queue` restarts from track 1 after the last track finishes.
+- Track loop takes priority if both track loop and queue loop are enabled.
+- `/stop` stops audio but keeps upcoming queue items.
+- `/clearqueue` removes upcoming items, current track keeps playing, and queue loop turns off.
+- Bot never auto-leaves on idle.
 
-- Guild playback settings
-  Per-guild comfort settings such as related-track autoplay mode and mood preset. Defaults are conservative: autoplay is off and mood is balanced.
+---
 
-## Provider Limits
+## Local setup
 
-YouTube search results and playlist entries are metadata. A YouTube watch page URL is not direct audio. Playback requires a resolver such as the current `yt-dlp` based path.
+**Requirements:**
+- Node.js 20 or newer
+- `yt-dlp` available on PATH (or set `YT_DLP_PATH`)
+- A Discord bot token
 
-Spotify search results and Spotify track URLs are metadata. Spotify does not expose full-track audio streams for Discord bots. Spotify metadata can only be played when the resolver finds a separate playable source.
-
-Direct audio URLs are treated as playable only after URL validation.
-
-The UX should stay honest about this distinction. Do not document or implement YouTube/Spotify page URLs as directly playable audio.
-
-Provider failures are normal runtime conditions. YouTube quota exhaustion, Spotify account/subscription or market restrictions, missing credentials, rate limits, and upstream outages are classified explicitly. Search and autoplay use cooldown/backoff state so the bot does not keep calling the same failing provider path on every queue end. During a cooldown, providers are skipped for metadata lookup and the bot keeps running.
-
-## Local Setup
-
-Install dependencies:
-
+**Step 1 — Install dependencies:**
 ```bash
 npm install
 ```
 
-Create `.env` from `.env.example` and fill in the values needed for your workflow.
-
-Required for running the bot:
-
+**Step 2 — Create `.env`:**
 ```bash
-DISCORD_TOKEN=
-DISCORD_CLIENT_ID=
-DISCORD_GUILD_ID=
+cp .env.example .env
 ```
 
-Optional for metadata search:
-
-```bash
-YOUTUBE_API_KEY=
-SPOTIFY_CLIENT_ID=
-SPOTIFY_CLIENT_SECRET=
-SPOTIFY_MARKET=ID
+Fill in at minimum:
+```
+DISCORD_TOKEN=your_bot_token
+DISCORD_CLIENT_ID=your_application_id
+DISCORD_GUILD_ID=your_test_server_id
 ```
 
-Optional for playback resolving:
-
+**Step 3 — Install yt-dlp:**
 ```bash
-YT_DLP_PATH=
+pip install -U yt-dlp
+# or download binary from https://github.com/yt-dlp/yt-dlp/releases
 ```
 
-`DISCORD_VOICE_DEBUG=false` can be set to `true` for verbose voice connection state logs during debugging.
+If yt-dlp is not on PATH, set `YT_DLP_PATH=/path/to/yt-dlp` in `.env`.
 
-## Runtime And Deployment
-
-There are two supported startup models:
-
-- Source-run development: `npm run dev`
-- Build-run hosting: `npm run build` followed by `npm start`
-
-The real production entrypoint is:
-
-```bash
-node dist/app/bootstrap/index.js
-```
-
-`npm start` uses that compiled file. Do not run `npm start` before building unless your deployment process already created `dist`.
-
-Long-running hosts should:
-
-1. Use Node.js 20 or newer.
-2. Run from the repository root or an equivalent working directory containing `.env`.
-3. Install dependencies with `npm ci` or `npm install`.
-4. Build with `npm run build`.
-5. Start with `npm start`.
-6. Ensure `yt-dlp` is on `PATH` or set `YT_DLP_PATH`.
-
-The Dockerfile uses Node 22, builds TypeScript into `dist`, installs `ffmpeg` and `yt-dlp`, and starts with `npm run start`.
-
-The bot is intentionally suitable for 24/7 hosting. It may remain online and connected to a voice channel continuously. Idle auto-leave is not enabled by default.
-
-## Discord Bot Setup
-
-1. Create an application in the Discord Developer Portal.
-2. Create a bot user and copy the bot token into `DISCORD_TOKEN`.
-3. Copy the application ID into `DISCORD_CLIENT_ID`.
-4. Enable the bot permissions needed to join and speak in voice channels.
-5. Invite the bot to your test server.
-6. Copy your test server ID into `DISCORD_GUILD_ID`.
-7. Register slash commands:
-
+**Step 4 — Register slash commands:**
 ```bash
 npm run register:commands
 ```
 
-Run the bot locally:
+Run this once, or again any time you add or change commands.
 
+**Step 5 — Start the bot:**
 ```bash
 npm run dev
 ```
 
-## YouTube API Key
+---
 
-`YOUTUBE_API_KEY` is used for YouTube metadata search through `/search` and for expanding YouTube playlist URLs passed to `/play`.
+## Discord bot setup
 
-To set it up:
+1. Go to https://discord.com/developers/applications
+2. Create a new application
+3. Go to "Bot" → create a bot user → copy the token
+4. Set `DISCORD_TOKEN` in `.env`
+5. Copy the Application ID → set `DISCORD_CLIENT_ID`
+6. Invite the bot to your server with `applications.commands` and voice permissions
+7. Copy your server ID → set `DISCORD_GUILD_ID`
+8. Run `npm run register:commands`
 
-1. Create or choose a Google Cloud project.
-2. Enable the YouTube Data API v3.
-3. Create an API key.
-4. Put the key in `.env` as `YOUTUBE_API_KEY`.
+---
 
-This key is not what makes audio playable. It only powers metadata search and playlist metadata lookup.
+## YouTube API key setup
 
-## Spotify Credentials
+Used for `/search` with YouTube provider and for expanding YouTube playlist URLs.
 
-Spotify metadata search uses client credentials:
+1. Go to https://console.cloud.google.com
+2. Create or open a project
+3. Enable "YouTube Data API v3"
+4. Create an API key under "Credentials"
+5. Set `YOUTUBE_API_KEY` in `.env`
 
-1. Create an app in the Spotify Developer Dashboard.
-2. Copy the client ID into `SPOTIFY_CLIENT_ID`.
-3. Copy the client secret into `SPOTIFY_CLIENT_SECRET`.
-4. Optionally set `SPOTIFY_MARKET`, for example `ID` or `US`.
+Without this key: `/search provider:youtube` fails gracefully.
+`/play` with direct YouTube URLs still works through `yt-dlp`.
 
-Spotify credentials do not grant Discord-playable full-track audio.
+---
 
-## FFmpeg And yt-dlp
+## Spotify credentials setup
 
-The project depends on `ffmpeg-static`, so contributors normally do not need to install FFmpeg separately.
+Used for `/search provider:spotify`. Spotify metadata only — not audio.
 
-Playback from metadata currently relies on `yt-dlp` being available:
+1. Go to https://developer.spotify.com/dashboard
+2. Create an app
+3. Copy Client ID → `SPOTIFY_CLIENT_ID`
+4. Copy Client Secret → `SPOTIFY_CLIENT_SECRET`
+5. Set `SPOTIFY_MARKET` to your region code (e.g. `ID` for Indonesia, `US`)
 
-```bash
-pip install -U yt-dlp
-```
+Spotify tracks found by search go through `yt-dlp` for actual playback.
+Spotify does not provide full-track audio streams for Discord bots.
 
-If `yt-dlp` is not on `PATH`, set `YT_DLP_PATH` to the executable path.
+---
+
+## All environment variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `DISCORD_TOKEN` | Yes | Bot authentication |
+| `DISCORD_CLIENT_ID` | Yes (register) | For slash command registration |
+| `DISCORD_GUILD_ID` | Yes (register) | Target guild for commands |
+| `YOUTUBE_API_KEY` | No | YouTube search and playlist expansion |
+| `SPOTIFY_CLIENT_ID` | No | Spotify metadata search |
+| `SPOTIFY_CLIENT_SECRET` | No | Spotify metadata search |
+| `SPOTIFY_MARKET` | No | Spotify region (default: `ID`) |
+| `YT_DLP_PATH` | No | Path to yt-dlp binary if not on PATH |
+| `DISCORD_VOICE_DEBUG` | No | `true` for verbose voice logs |
+
+---
 
 ## Commands
 
-- `/search query:<text> provider:<all|youtube|spotify>`
-  Searches metadata and stores the latest results per guild.
+| Command | Description |
+|---|---|
+| `/play query:<text-or-url>` | Enqueue a track or playlist. Starts playback if idle. Never interrupts. |
+| `/search query:<text> provider:<all\|youtube\|spotify>` | Search metadata and store results for `/pick` |
+| `/pick number:<1-10>` | Select a result from the latest `/search` |
+| `/selected` | Show the currently selected track |
+| `/enqueue` | Add selected track to queue without interrupting |
+| `/queue` | Show current and upcoming queue state |
+| `/nowplaying` | Show the current track |
+| `/loop` | Toggle repeat for the current track |
+| `/loop scope:queue` | Toggle queue loop for the current queue |
+| `/skip` | Skip current track, advance to next |
+| `/clearqueue` | Remove upcoming tracks (current keeps playing) |
+| `/remove position:<n>` | Remove upcoming track at position N |
+| `/pause` | Pause current playback |
+| `/resume` | Resume paused playback |
+| `/autoplay mode:<status\|off\|related>` | Configure related-track continuation |
+| `/mood preset:<status\|balanced\|focus\|chill\|upbeat>` | Set mood for autoplay scoring |
+| `/stop` | Stop current playback (upcoming queue preserved) |
+| `/join` | Join your voice channel |
+| `/leave` | Leave the voice channel |
 
-- `/pick number:<n>`
-  Selects a metadata result from the latest search. It does not play or enqueue by itself.
+---
 
-- `/selected`
-  Shows the selected metadata result and the playback limitation note for its provider.
-
-- `/enqueue`
-  Adds the selected track to the per-guild queue. If nothing is currently playing, playback starts. If something is already playing, the new item waits its turn.
-
-- `/queue`
-  Shows current playback state and upcoming queue items. The queue display renders up to 20 upcoming items and splits long output across multiple embed fields so Discord field limits are not exceeded.
-
-- `/nowplaying`
-  Shows the current queue item.
-
-- `/loop`
-  Toggles repeat for the current queue item. When enabled, the current item replays after it finishes and upcoming queue items keep waiting. Run `/loop` again to turn it off.
-
-- `/skip`
-  Skips the current item and starts the next queued item when available.
-
-- `/clearqueue`
-  Clears upcoming items without interrupting the current item.
-
-- `/remove position:<n>`
-  Removes an upcoming item by 1-based position.
-
-- `/pause` and `/resume`
-  Pauses or resumes current playback.
-
-- `/play query:<text-or-url>`
-  Resolves a playable source from text or URL input. If the player is idle, playback starts immediately. If the input is a YouTube playlist URL, each playlist entry is queued in order and the first item starts when idle. If something is already playing, the resolved item or playlist entries are added to the upcoming queue without interrupting the current item.
-
-- `/autoplay mode:<status|off|related>`
-  Shows or changes related-track continuation for this guild. The default is `off`.
-
-- `/mood preset:<status|balanced|focus|chill|upbeat>`
-  Shows or changes the per-guild mood preset used as a small ranking signal for related-track suggestions.
-
-- `/stop`
-  Stops current playback state but keeps upcoming queue items.
-
-- `/leave`
-  Leaves the voice channel and stops playback state.
-
-## Queue Behavior
-
-Queue state is scoped per guild.
-
-In-guild command replies are public so everyone can see who joined, queued, skipped, or otherwise changed playback.
-
-Enqueueing while idle starts playback immediately. Enqueueing while already playing does not interrupt the current item. `/play` follows the same comfort rule for active playback: it resolves the requested source and queues it instead of replacing the current song.
-
-When `/play` receives a YouTube playlist URL, the YouTube provider expands the playlist into ordered metadata `Track` items first. The queue stores those entries individually, and each item still goes through the playable-source resolver when it becomes current. This avoids treating a playlist page or YouTube watch page as direct audio.
-
-When a track finishes naturally, the voice gateway notifies the application layer and the next queued item starts automatically.
-
-If current-track loop is enabled with `/loop`, the finished current item is resolved and played again instead of advancing. The upcoming queue is preserved until loop is turned off or the current item is skipped/stopped. Looping does not auto-leave or create provider metadata assumptions; replay still goes through the same playable-source resolver path.
-
-If the queue is empty and `/autoplay mode:related` is enabled, the application searches metadata providers for a related candidate using deterministic scoring. The scorer uses normalized title similarity, token overlap, artist/channel overlap, provider match, and a small mood bonus. The candidate still has to go through the playable-source resolver before playback. Autoplay-generated suggestions are queued only after a playable source is resolved and playback starts.
-
-If autoplay is off or no strong related candidate exists, playback becomes idle and the bot may remain connected. It does not auto-leave by default.
-
-Related autoplay is bounded for each queue-end transition. It distinguishes these outcomes:
-
-- no related candidate
-- provider unavailable
-- provider on cooldown
-- metadata-only suggestion
-- playback failure after resolution
-- playable continuation
-
-If all providers are unavailable or on cooldown, autoplay stops cleanly for that transition. If a related suggestion cannot be resolved to an honest playable source, it is treated as metadata-only and is not queued as fake audio. The bot stays present and the queue remains clean.
-
-Playback failure rollback is deterministic. If an item is promoted to current and source resolution or voice playback fails, that item is restored to the front of the upcoming queue.
-
-`/clearqueue` only clears upcoming items. It does not stop the current track.
-
-`/remove` only removes upcoming items. It cannot remove the currently playing item; use `/skip` or `/stop` for that.
-
-## Tests
-
-Run all tests:
+## Running tests
 
 ```bash
-npm test
+npm test           # run all tests with vitest
+npm run test:coverage # run coverage for domain/application thresholds
+npm run typecheck  # tsc --noEmit — zero errors required
+npm run build      # compile TypeScript
 ```
 
-Run the TypeScript typecheck:
+Tests focus on domain and application behavior:
+- Enqueue while idle → starts playback
+- Enqueue while playing → appends without interrupting
+- Queue order preservation
+- Auto-advance to next item
+- Skip behavior
+- Clear queue
+- Queue loop wrap, skip, clear, stop, leave, and track-loop priority behavior
+- Remove valid/invalid position
+- Rollback on resolver failure
+- Search session and selected track per guild
+- Empty state behavior
 
-```bash
-npm run typecheck
-```
-
-Build the project:
-
-```bash
-npm run build
-```
-
-The tests focus on domain and application behavior, including queue order, enqueue behavior, autoplay advancement, skip, clear, remove, and search-session selection.
-
-Additional coverage protects rollback on resolver and voice playback failure, `/play` queue-while-playing semantics, related-track scoring, guild autoplay settings, and mood isolation.
+---
 
 ## CI
 
-GitHub Actions runs:
+GitHub Actions runs on every push and pull request:
 
-```bash
-npm ci
-npm run typecheck
-npm run build
-npm test
+```yaml
+- npm ci
+- npm run typecheck
+- npm run build
+- npm run test:coverage
 ```
 
-All checks must pass before a change is considered ready.
+All four must pass. PRs cannot merge with failing CI. Coverage is enforced for
+`src/domain` and `src/application`.
 
-## Contribution Workflow
+---
 
-1. Read `AGENTS.md` before significant changes.
-2. Keep domain logic free of Discord SDK and HTTP details.
-3. Add application or domain tests for queue and playback behavior changes.
-4. Preserve the metadata-versus-playable-source distinction in code, docs, tests, and UX.
-5. Run typecheck, build, and tests before opening a pull request.
+## Production / Docker
 
-## Review Checklist
+Build:
+```bash
+npm run build
+npm start   # runs node dist/app/bootstrap/index.js
+```
 
-- Metadata providers do not pretend to return playable audio.
-- Queue commands do not silently interrupt current playback.
-- `/play` starts immediately only when idle and appends when playback is already active.
-- `/enqueue` appends selected metadata and does not interrupt current playback.
-- Related-track autoplay remains opt-in per guild.
-- Idle auto-leave is not introduced as a default behavior.
-- Discord handlers call application use cases instead of owning business logic.
-- New commands are registered and documented.
-- Tests cover meaningful behavior rather than placeholders.
-- CI fails on typecheck, build, or test failures.
+With Docker:
+```bash
+docker build -t orchestra-voice .
+docker run -e DISCORD_TOKEN=... -e DISCORD_CLIENT_ID=... orchestra-voice
+```
+
+The Dockerfile installs `ffmpeg` and `yt-dlp` automatically.
+`ffmpeg-static` is included in npm deps so local dev doesn't need system FFmpeg.
+
+---
+
+## Contribution guide
+
+Before any significant change:
+1. Read `AGENTS.md`
+2. Read the relevant skill in `.agents/skills/`
+3. Trace the current code path end-to-end
+4. Write a short implementation plan
+
+Architecture rules:
+- Domain stays pure — no SDK imports, no HTTP
+- Business logic goes in use cases, not command handlers
+- Discord interaction objects stay in infrastructure
+- Queue logic goes in `GuildQueue` entity and `PlaybackQueueService`
+
+PR checklist:
+- [ ] `npm run typecheck` passes
+- [ ] `npm run build` passes
+- [ ] `npm test` passes
+- [ ] `npm run test:coverage` passes
+- [ ] Docs updated if behavior changed
+- [ ] No new dead imports or commented-out code
+- [ ] Metadata/playable-source boundary preserved
+
+---
+
+## Skill files reference
+
+The `.agents/skills/` directory contains detailed implementation guides:
+
+| Skill | When to read it |
+|---|---|
+| `playback-semantics.md` | `/play`, queue loop, auto-advance, rollback |
+| `autoplay-related.md` | Related track continuation, mood, cooldown |
+| `voice-comfort.md` | Embeds, UX, same-channel validation, empty states |
+| `provider-resilience.md` | Provider failures, yt-dlp errors, backoff |
+| `deployment-runtime.md` | Env vars, Docker, CI, npm scripts |
+| `docs-and-onboarding.md` | Updating README, GETTING_STARTED, .env.example |

@@ -1,134 +1,125 @@
+# Skill: autoplay-related
+
+Read this skill before working on:
+- `/autoplay` command
+- `/mood` command
+- Related-track continuation logic
+- `RelatedTrackScorer` or equivalent
+- Provider cooldown during autoplay
+
 ---
-name: autoplay-related
-description: Use this skill when implementing or modifying related-track suggestion, autoplay continuation, track similarity scoring, or guild-level autoplay settings.
+
+## Autoplay is opt-in
+
+Default per guild: `off`.
+Users enable it with `/autoplay mode:related`.
+The bot must never search for related tracks unless explicitly enabled.
+
 ---
 
-# Purpose
+## When autoplay triggers
 
-This skill governs "related track" continuation in `orchestra-voice`.
+Autoplay runs only when ALL of these are true:
+1. The queue just became empty (the last item finished naturally)
+2. `autoplay.mode` for this guild is `related`
+3. No provider is on cooldown that would block all candidates
 
-Use this skill whenever the task involves:
+It does NOT run after:
+- `/skip` to an empty queue (user-initiated, user can add more)
+- `/stop`
+- `/clearqueue` that empties everything
+- `/leave`
 
-- autoplay after queue ends
-- suggested next track behavior
-- track similarity scoring
-- related-track recommendation
-- autoplay configuration per guild
-- mood-aware recommendation behavior
+---
 
-This repository should prefer deterministic, maintainable recommendation logic over heavy ML or vector systems unless there is a strong justification.
+## The autoplay flow (bounded)
 
-# Core rules
+```
+queue empties naturally
+  → check autoplay enabled
+  → pick seed track (last played item's metadata)
+  → query providers for related candidates (max 1 round of calls)
+  → score candidates
+  → pick top candidate above threshold
+  → resolve through yt-dlp
+    → success: enqueue and play
+    → failure: log, stay idle, do NOT retry
+  → if no candidate above threshold: stay idle
+  → if all providers on cooldown: stay idle
+```
 
-1. Respect provider truth.
-   - YouTube and Spotify are metadata/search providers unless the repository has an explicit playable-source resolver path.
-   - Do not pretend that a suggested related track is automatically playable.
+This flow runs exactly once per queue-empty event.
+It does not loop, retry, or chain into another autoplay call.
 
-2. Related-track logic should be explainable.
-   - Prefer simple, deterministic heuristics:
-     - normalized title similarity
-     - token overlap
-     - artist/channel overlap
-     - Levenshtein-style similarity
-     - provider-aware bonuses
-   - Avoid unnecessary embeddings/vector databases for the first implementation.
+---
 
-3. Autoplay should be configurable per guild.
-   - Suggested commands:
-     - `/autoplay on`
-     - `/autoplay off`
-     - `/autoplay status`
+## Related track scoring
 
-4. If a related track is metadata-only:
-   - do not fake playback
-   - either suggest it honestly
-   - or store it as a recommendation / up-next suggestion
-   - make UX explicit
+Score each candidate on these dimensions:
 
-# Recommended design
+| Signal | Weight | Notes |
+|---|---|---|
+| Title token overlap with seed | high | normalized, lowercased |
+| Artist / channel overlap | high | exact match preferred |
+| Provider match | medium | prefer same provider as seed |
+| Mood bonus | low | from guild mood preset |
+| Duration proximity | low | within 60s of seed duration |
 
-Preferred concepts:
+Reject candidates with score below threshold (e.g. 0.3).
+If no candidate clears threshold, stay idle — do not pick a random result.
 
-- `RelatedTrackFinder`
-- `TrackSimilarityScorer`
-- `GuildAutoplaySettings`
-- `RelatedTrackSuggestion`
-- `RecentPlaybackHistory` if needed
+The scorer lives in `src/domain` or `src/application`. It must not contain
+HTTP calls or Discord SDK references.
 
-Preferred flow:
+---
 
-1. current track ends naturally
-2. queue is empty
-3. autoplay is checked for the guild
-4. related-track finder looks for best candidate
-5. if candidate is playable through an explicit resolver path, continue playback
-6. otherwise, surface the recommendation honestly
+## Mood presets
 
-# Similarity guidance
+Mood is a per-guild setting changed with `/mood preset:<value>`.
 
-Prefer a weighted scoring approach using simple features.
+| Preset | Effect on scoring |
+|---|---|
+| `balanced` | No modifier (default) |
+| `focus` | Prefer instrumental, longer duration |
+| `chill` | Prefer slower-tempo keywords |
+| `upbeat` | Prefer higher-tempo keywords |
 
-Candidate signals:
+Mood only adjusts scoring weights slightly. It is not a hard filter.
+It must not change which providers are called.
 
-- normalized title string similarity
-- token overlap
-- artist exact match or partial match
-- provider match bonus
-- penalties for noisy variants such as:
-  - official video
-  - lyric video
-  - live
-  - remaster
-  - sped up
-  - slowed
-  - reverb
+---
 
-Recommended preprocessing:
+## Cooldown behavior
 
-- lowercase
-- trim punctuation noise
-- remove common non-musical modifiers
-- normalize repeated whitespace
+After a provider call fails (quota, 403, network):
+- Set a per-provider cooldown (e.g. 5 minutes for quota errors)
+- During cooldown, skip that provider for all calls (autoplay and search)
+- Log the cooldown start and expected expiry
+- After expiry, allow the provider to be called again
 
-# Mood-aware extension
+Cooldown must not block all providers simultaneously from separate failures.
+Each provider has its own cooldown timer.
 
-If mood features exist, related-track suggestions may adapt by mood:
+---
 
-- `focus`
-- `chill`
-- `upbeat`
+## What NOT to do
 
-But keep the implementation simple and testable.
-Mood should influence ranking, not replace the core similarity model.
+- Do NOT chain autoplay calls — one attempt per queue-empty event
+- Do NOT fake a related track by picking a random search result
+- Do NOT enqueue a candidate before yt-dlp resolves it successfully
+- Do NOT run autoplay when user explicitly stopped/skipped to empty
+- Do NOT let mood affect which providers are queried
+- Do NOT crash the bot if a provider is unavailable
 
-# Testing requirements
+---
 
-Changes in this area should include tests for:
+## Files likely involved
 
-- exact-title similarity
-- partial-title similarity
-- artist bonus behavior
-- noisy title normalization
-- no-candidate case
-- autoplay enabled vs disabled
-- guild-level setting isolation
-- suggestion behavior when a track is metadata-only
-- suggestion behavior when a playable source exists
-
-# Documentation requirements
-
-If autoplay-related behavior changes:
-
-- update `GETTING_STARTED.md`
-- document `/autoplay` commands
-- document whether related suggestions are auto-played or only recommended
-- document provider limitations clearly
-
-# Anti-patterns to avoid
-
-Do not:
-
-- fake direct playback from unsupported provider page URLs
-- use opaque recommendation logic that is hard to test
-- make related-track behavior unpredictable
-- silently enqueue metadata-only tracks as if they were guaranteed playable
+| File | Purpose |
+|---|---|
+| `src/domain/entities/GuildPlaybackSettings.ts` | Autoplay mode, mood preset per guild |
+| `src/application/services/RelatedTrackService.ts` | Autoplay orchestration |
+| `src/domain/services/RelatedTrackScorer.ts` | Pure scoring logic |
+| `src/infrastructure/discord/commands/autoplay.ts` | Discord handler |
+| `src/infrastructure/discord/commands/mood.ts` | Discord handler |
+| `src/application/ports/ISearchProvider.ts` | Provider interface |
